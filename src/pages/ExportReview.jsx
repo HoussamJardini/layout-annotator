@@ -10,8 +10,18 @@ import { exportZip, downloadJson, downloadText } from '../utils/exportZip'
 import Button from '../components/ui/Button'
 import Toggle from '../components/ui/Toggle'
 import Badge from '../components/ui/Badge'
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
 
 function MarkdownPreview({ source }) {
+  const escaped = escapeHtml(source)
   const html = source
     .replace(/^# (.+)$/gm, '<h1 style="font-size:20px;font-weight:700;color:var(--text-primary);margin:20px 0 8px;border-bottom:2px solid var(--accent);padding-bottom:6px">$1</h1>')
     .replace(/^## (.+)$/gm, '<h2 style="font-size:15px;font-weight:700;color:var(--accent-light);margin:18px 0 6px">$1</h2>')
