@@ -68,16 +68,16 @@ tesseract-ocr-w64-setup-5.x.x.exe
 Keep the default install path: `C:\Program Files\Tesseract-OCR\`
 
 ### 3. Set up the backend
+
+The `server.py` file is located in the project root alongside `start.bat`.
 ```bat
-cd backend
-python -m venv venv
-venv\Scripts\activate
+python -m venv vevn
+vevn\Scripts\activate
 pip install fastapi uvicorn pytesseract pillow numpy transformers torch torchvision sentencepiece tiktoken
 ```
 
 ### 4. Install frontend dependencies
 ```bat
-cd ..
 npm install
 ```
 
@@ -88,17 +88,18 @@ npm install
 ### One-click start (Windows)
 
 Double-click **`start.bat`** in the project root. It will:
-- Check for Node.js and Python
-- Install missing dependencies automatically
+- Check for Node.js, Python, and Tesseract
+- Create the virtual environment if it doesn't exist
+- Install any missing Python packages automatically
+- Install frontend dependencies if needed
 - Start the OCR backend in a separate window
-- Start the frontend and open the browser
+- Start the frontend and open the browser automatically
 
 ### Manual start
 
 **Terminal 1 — Backend:**
 ```bat
-cd backend
-venv\Scripts\activate
+vevn\Scripts\activate
 python server.py
 ```
 
@@ -212,25 +213,27 @@ class_id cx cy width height
 ## Project Structure
 ```
 layout-annotator/
-├── start.bat                   ← one-click launcher
-├── backend/
-│   └── server.py               ← FastAPI OCR + table detection server
-├── src/
-│   ├── pages/
-│   │   ├── ClassConfig.jsx     ← label class manager
-│   │   ├── SchemaEditor.jsx    ← export schema configuration
-│   │   ├── Annotator.jsx       ← main annotation workspace
-│   │   ├── ExportReview.jsx    ← export & review
-│   │   └── About.jsx           ← about page
-│   ├── components/
-│   │   ├── canvas/             ← annotation canvas, bounding box, table builder
-│   │   ├── sidebar/            ← file tree, label picker, annotation list
-│   │   ├── schema/             ← schema field editor, JSON preview
-│   │   ├── export/             ← export panel components
-│   │   └── ui/                 ← Button, Modal, Badge, Toggle, ColorPicker
-│   ├── store/                  ← Zustand state (annotations, classes, schema, session)
-│   ├── hooks/                  ← useOCR, useFileSystem, usePdfRenderer, useKeyboardShortcuts
-│   └── utils/                  ← exportJson, exportMarkdown, exportCoco, exportYolo, exportZip
+├── start.bat                   ← one-click launcher (Windows)
+├── server.py                   ← FastAPI OCR + table detection server
+├── vevn/                       ← Python virtual environment (not committed)
+├── package.json
+├── vite.config.js
+└── src/
+    ├── pages/
+    │   ├── ClassConfig.jsx     ← label class manager
+    │   ├── SchemaEditor.jsx    ← export schema configuration
+    │   ├── Annotator.jsx       ← main annotation workspace
+    │   ├── ExportReview.jsx    ← export & review
+    │   └── About.jsx           ← about page
+    ├── components/
+    │   ├── canvas/             ← annotation canvas, bounding box, table builder
+    │   ├── sidebar/            ← file tree, label picker, annotation list
+    │   ├── schema/             ← schema field editor, JSON preview
+    │   ├── export/             ← export panel components
+    │   └── ui/                 ← Button, Modal, Badge, Toggle, ColorPicker
+    ├── store/                  ← Zustand state (annotations, classes, schema, session)
+    ├── hooks/                  ← useOCR, useFileSystem, usePdfRenderer, useKeyboardShortcuts
+    └── utils/                  ← exportJson, exportMarkdown, exportCoco, exportYolo, exportZip
 ```
 
 ---
