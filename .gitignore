@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python eggs / packaging
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# HuggingFace model cache (large, re-downloads automatically)
+.cache/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Vite
+.vite/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp
+*.tmp
+*.temp
