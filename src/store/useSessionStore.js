@@ -1,16 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-// A FileNode = { type: 'file'|'folder', name, path, children?, page? }
-
 export const useSessionStore = create(
   persist(
     (set, get) => ({
-      folderName:  null,
-      fileTree:    [],       // nested FileNode[]
-      flatQueue:   [],       // flat list of { fileName, folder, page, sourceType }
-      currentIdx:  0,
-      expandedDirs: {},      // { [path]: bool }
+      folderName:   null,
+      fileTree:     [],
+      flatQueue:    [],
+      currentIdx:   0,
+      expandedDirs: {},
 
       setFileTree: (folderName, tree, flat) => set({
         folderName,
@@ -47,6 +45,21 @@ export const useSessionStore = create(
         expandedDirs: {},
       }),
     }),
-    { name: 'annotator:session' }
+    {
+      name: 'annotator:session',
+      // Never persist handles — FileSystemFileHandle cannot be serialized
+      partialize: (s) => ({
+        folderName:   s.folderName,
+        currentIdx:   s.currentIdx,
+        expandedDirs: s.expandedDirs,
+      }),
+      // After rehydration, clear stale queue so user must re-open folder
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.fileTree  = []
+          state.flatQueue = []
+        }
+      },
+    }
   )
 )

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { FolderOpen, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { FolderOpen, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSessionStore } from '../store/useSessionStore'
 import { useAnnotationStore } from '../store/useAnnotationStore'
 import { useFileSystem } from '../hooks/useFileSystem'
@@ -11,21 +11,20 @@ import FileTree from '../components/sidebar/FileTree'
 import LabelPicker from '../components/sidebar/LabelPicker'
 import AnnotationList from '../components/sidebar/AnnotationList'
 import Button from '../components/ui/Button'
-
+import PerspectiveCorrector from '../components/canvas/PerspectiveCorrector'
+import { resolveFileHandle } from '../hooks/useFileSystem'
 function ResizeHandle({ onDrag, vertical = false }) {
   const dragging = useRef(false)
   const last     = useRef(0)
-
   const onMouseDown = (e) => {
     e.preventDefault()
     dragging.current = true
     last.current = vertical ? e.clientY : e.clientX
     const onMove = (ev) => {
       if (!dragging.current) return
-      const cur   = vertical ? ev.clientY : ev.clientX
-      const delta = cur - last.current
+      const cur = vertical ? ev.clientY : ev.clientX
+      onDrag(cur - last.current)
       last.current = cur
-      onDrag(delta)
     }
     const onUp = () => {
       dragging.current = false
@@ -39,18 +38,15 @@ function ResizeHandle({ onDrag, vertical = false }) {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
-
   return (
-    <div
-      onMouseDown={onMouseDown}
-      style={{
-        width: vertical ? '100%' : 4, height: vertical ? 4 : '100%',
-        flexShrink: 0, background: 'var(--surface-border)',
-        cursor: vertical ? 'row-resize' : 'col-resize',
-        transition: 'background 0.15s', position: 'relative', zIndex: 10,
-      }}
-      onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
-      onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-border)'}
+    <div onMouseDown={onMouseDown} style={{
+      width: vertical ? '100%' : 4, height: vertical ? 4 : '100%',
+      flexShrink: 0, background: 'var(--surface-border)',
+      cursor: vertical ? 'row-resize' : 'col-resize',
+      transition: 'background 0.15s', zIndex: 10,
+    }}
+    onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+    onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-border)'}
     />
   )
 }
@@ -62,32 +58,61 @@ export default function Annotator() {
   const flatQueue    = useSessionStore(s => s.flatQueue)
   const setImageMeta = useAnnotationStore(s => s.setImageMeta)
 
-  const [imgData, setImgData]     = useState(null)
-  const [loadError, setLoadError] = useState(null)
-  const [leftW,  setLeftW]        = useState(220)
-  const [rightW, setRightW]       = useState(240)
-  const [labelH, setLabelH]       = useState(200)
+  const [imgData,      setImgData]      = useState(null)
+  const [loadError,    setLoadError]    = useState(null)
+  const [pdfPage,      setPdfPage]      = useState(0)
+  const [pdfNumPages,  setPdfNumPages]  = useState(1)
+  const [deskewing,    setDeskewing]    = useState(false)
+  const [correctedImg, setCorrectedImg] = useState(null)
+  const [leftW,        setLeftW]        = useState(220)
+  const [rightW,       setRightW]       = useState(240)
+  const [labelH,       setLabelH]       = useState(200)
+
+  useEffect(() => {
+    setPdfPage(0)
+    setPdfNumPages(1)
+    setCorrectedImg(null)
+    setDeskewing(false)
+  }, [currentFile?.path])
+
+  const effectivePage = currentFile?.sourceType === 'pdf' ? pdfPage : (currentFile?.page ?? 0)
+  const isPdf = currentFile?.sourceType === 'pdf'
 
   useKeyboardShortcuts(currentFile)
 
   useEffect(() => {
     if (!currentFile) return
-    setImgData(null); setLoadError(null)
+    setImgData(null)
+    setLoadError(null)
+
     const load = async () => {
+      if (!currentFile.handle) {
+        setLoadError('__REOPEN__')
+        return
+      }
+      let file
       try {
-        if (currentFile.sourceType === 'pdf') {
-          const res = await renderPage(currentFile.handle, (currentFile.page ?? 0) + 1, 2)
+        file = await currentFile.handle.getFile()
+      }  catch (e) {
+        console.warn('getFile error:', e.name, e.message)
+        setLoadError('__REOPEN__')
+        return
+      }
+      try {
+        if (isPdf) {
+          const res = await renderPage(currentFile.handle, pdfPage + 1, 2)
           setImgData({ url: res.dataUrl, width: res.width, height: res.height })
-          setImageMeta(currentFile.fileName, currentFile.page ?? 0, {
-            width: res.width, height: res.height, sourceType: 'pdf', folder: currentFile.folder,
+          setPdfNumPages(res.numPages)
+          setImageMeta(currentFile.fileName, pdfPage, {
+            width: res.width, height: res.height,
+            sourceType: 'pdf', folder: currentFile.folder,
           })
         } else {
-          const file = await currentFile.handle.getFile()
-          const url  = URL.createObjectURL(file)
-          const img  = new Image()
+          const url = URL.createObjectURL(file)
+          const img = new Image()
           img.onload = () => {
             setImgData({ url, width: img.naturalWidth, height: img.naturalHeight })
-            setImageMeta(currentFile.fileName, currentFile.page ?? 0, {
+            setImageMeta(currentFile.fileName, 0, {
               width: img.naturalWidth, height: img.naturalHeight,
               sourceType: 'image', folder: currentFile.folder,
             })
@@ -95,15 +120,20 @@ export default function Annotator() {
           img.onerror = () => setLoadError('Failed to load image')
           img.src = url
         }
-      } catch (e) { setLoadError(e.message) }
+      } catch (e) {
+        setLoadError(e.message || 'Failed to render file')
+      }
     }
     load()
-  }, [currentFile?.path, currentFile?.page])
+  }, [currentFile?.path, pdfPage])
+
+  const activeUrl = correctedImg?.url    ?? imgData?.url
+  const activeW   = correctedImg?.width  ?? imgData?.width
+  const activeH   = correctedImg?.height ?? imgData?.height
 
   return (
     <div style={{ height:'100%', display:'flex', overflow:'hidden' }}>
 
-      {/* Left sidebar */}
       <div style={{ width:leftW, minWidth:140, maxWidth:480, display:'flex', flexDirection:'column', background:'var(--surface)', overflow:'hidden', flexShrink:0 }}>
         <div style={{ padding:10, borderBottom:'1px solid var(--surface-border)', flexShrink:0 }}>
           <Button size="sm" icon={FolderOpen} onClick={openFolder} style={{ width:'100%', justifyContent:'center' }}>
@@ -116,64 +146,96 @@ export default function Annotator() {
 
       <ResizeHandle onDrag={dx => setLeftW(w => Math.max(140, Math.min(480, w + dx)))} />
 
-      {/* Center canvas */}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:200 }}>
-        <CanvasToolbar fileName={currentFile?.fileName} page={currentFile?.page ?? 0} />
+        <CanvasToolbar
+          fileName={currentFile?.fileName}
+          page={effectivePage}
+          onDeskew={imgData ? () => setDeskewing(true) : undefined}
+        />
+
+        {isPdf && pdfNumPages > 1 && (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'4px 16px', borderBottom:'1px solid var(--surface-border)', background:'var(--surface)', flexShrink:0 }}>
+            <button onClick={() => setPdfPage(p => Math.max(0, p-1))} disabled={pdfPage === 0}
+              style={{ background:'none', border:'none', cursor: pdfPage===0?'not-allowed':'pointer', color: pdfPage===0?'var(--text-muted)':'var(--text-secondary)', display:'flex', padding:4, borderRadius:4 }}>
+              <ChevronLeft size={15}/>
+            </button>
+            <span style={{ fontSize:12, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>
+              Page <b style={{ color:'var(--text-primary)' }}>{pdfPage+1}</b> / {pdfNumPages}
+            </span>
+            <button onClick={() => setPdfPage(p => Math.min(pdfNumPages-1, p+1))} disabled={pdfPage===pdfNumPages-1}
+              style={{ background:'none', border:'none', cursor: pdfPage===pdfNumPages-1?'not-allowed':'pointer', color: pdfPage===pdfNumPages-1?'var(--text-muted)':'var(--text-secondary)', display:'flex', padding:4, borderRadius:4 }}>
+              <ChevronRight size={15}/>
+            </button>
+          </div>
+        )}
+
         {!currentFile ? (
           <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, color:'var(--text-muted)' }}>
             <FolderOpen size={48} strokeWidth={1} />
             <div style={{ textAlign:'center' }}>
               <p style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)', marginBottom:6 }}>No file selected</p>
-              <p style={{ fontSize:13 }}>Open a folder from the left sidebar</p>
+              <p style={{ fontSize:13 }}>Open a folder to start annotating</p>
             </div>
             <Button icon={FolderOpen} onClick={openFolder}>Open Folder</Button>
           </div>
         ) : loadError ? (
-          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:8, color:'var(--danger)' }}>
-            <AlertCircle size={20}/><span>{loadError}</span>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, color:'var(--danger)' }}>
+            <AlertCircle size={32} strokeWidth={1.5}/>
+            {loadError === '__REOPEN__' ? (
+              <>
+                <div style={{ textAlign:'center' }}>
+                  <p style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>File access lost</p>
+                  <p style={{ fontSize:13, color:'var(--text-muted)' }}>Chrome requires you to re-open the folder to regain access.</p>
+                </div>
+                <Button icon={FolderOpen} onClick={openFolder}>Re-open Folder</Button>
+              </>
+            ) : (
+              <span style={{ fontSize:13 }}>{loadError}</span>
+            )}
           </div>
         ) : rendering || !imgData ? (
           <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-muted)', gap:10 }}>
             <div className="pulse-dot" style={{ width:8, height:8, borderRadius:'50%', background:'var(--accent)' }} />
-            <span style={{ fontSize:13 }}>Loading{currentFile.sourceType === 'pdf' ? ' PDF page' : ' image'}…</span>
+            <span style={{ fontSize:13 }}>{isPdf ? `Rendering page ${pdfPage+1}…` : 'Loading image…'}</span>
           </div>
         ) : (
-          <AnnotationCanvas
-            imageUrl={imgData.url} imgWidth={imgData.width} imgHeight={imgData.height}
-            fileName={currentFile.fileName} page={currentFile.page ?? 0}
-          />
+          <>
+            {deskewing && (
+              <PerspectiveCorrector
+                imageUrl={activeUrl} imgWidth={activeW} imgHeight={activeH}
+                onApply={(url, w, h) => { setCorrectedImg({ url, width:w, height:h }); setDeskewing(false) }}
+                onClose={() => setDeskewing(false)}
+              />
+            )}
+            <AnnotationCanvas
+              imageUrl={activeUrl} imgWidth={activeW} imgHeight={activeH}
+              fileName={currentFile.fileName} page={effectivePage}
+            />
+          </>
         )}
       </div>
 
-      <ResizeHandle onDrag={dx => setRightW(w => Math.max(160, Math.min(520, w - dx)))} />
+      <ResizeHandle onDrag={dx => setRightW(w => Math.max(160, Math.min(520, w-dx)))} />
 
-      {/* Right sidebar */}
       <div style={{ width:rightW, minWidth:160, maxWidth:520, display:'flex', flexDirection:'column', background:'var(--surface)', overflow:'hidden', flexShrink:0 }}>
-
-        {/* Labels */}
         <div style={{ height:labelH, minHeight:80, maxHeight:'70%', display:'flex', flexDirection:'column', overflow:'hidden', flexShrink:0 }}>
           <div style={{ padding:'8px 10px 6px', borderBottom:'1px solid var(--surface-border)', flexShrink:0 }}>
             <span style={{ fontSize:11, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Labels</span>
           </div>
-          <div style={{ padding:8, overflowY:'auto', flex:1 }}>
-            <LabelPicker />
-          </div>
+          <div style={{ padding:8, overflowY:'auto', flex:1 }}><LabelPicker /></div>
         </div>
 
-        <ResizeHandle vertical onDrag={dy => setLabelH(h => Math.max(80, Math.min(500, h + dy)))} />
+        <ResizeHandle vertical onDrag={dy => setLabelH(h => Math.max(80, Math.min(500, h+dy)))} />
 
-        {/* Annotations */}
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minHeight:80 }}>
-          <div style={{ padding:'8px 10px 6px', borderBottom:'1px solid var(--surface-border)', flexShrink:0 }}>
+          <div style={{ padding:'8px 10px 6px', borderBottom:'1px solid var(--surface-border)', flexShrink:0, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <span style={{ fontSize:11, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Annotations</span>
+            {isPdf && <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>p.{pdfPage+1}</span>}
           </div>
           <div style={{ flex:1, overflowY:'auto', padding:'0 8px 8px' }}>
             <AnnotationList
-              fileName={currentFile?.fileName}
-              page={currentFile?.page ?? 0}
-              imageUrl={imgData?.url}
-              imgWidth={imgData?.width}
-              imgHeight={imgData?.height}
+              fileName={currentFile?.fileName} page={effectivePage}
+              imageUrl={activeUrl} imgWidth={activeW} imgHeight={activeH}
             />
           </div>
         </div>

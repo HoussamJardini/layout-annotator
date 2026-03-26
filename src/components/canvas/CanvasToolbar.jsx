@@ -1,17 +1,16 @@
-import { ZoomIn, ZoomOut, RotateCcw, Maximize2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RotateCcw, Trash2, ChevronLeft, ChevronRight, Crop } from 'lucide-react'
 import { useAnnotationStore } from '../../store/useAnnotationStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import Tooltip from '../ui/Tooltip'
 
-export default function CanvasToolbar({ fileName, page }) {
-  const undo          = useAnnotationStore(s => s.undo)
-  const redo          = useAnnotationStore(s => s.redo)
-  const clearAll      = useAnnotationStore(s => s.clearAnnotations)
-  const annCount      = useAnnotationStore(s => s.getAnnotations(fileName, page).length)
-  const next          = useSessionStore(s => s.nextFile)
-  const prev          = useSessionStore(s => s.prevFile)
-  const currentIdx    = useSessionStore(s => s.currentIdx)
-  const total         = useSessionStore(s => s.flatQueue.length)
+export default function CanvasToolbar({ fileName, page, onDeskew }) {
+  const undo       = useAnnotationStore(s => s.undo)
+  const clearAll   = useAnnotationStore(s => s.clearAnnotations)
+  const annCount   = useAnnotationStore(s => s.getAnnotations(fileName, page).length)
+  const next       = useSessionStore(s => s.nextFile)
+  const prev       = useSessionStore(s => s.prevFile)
+  const currentIdx = useSessionStore(s => s.currentIdx)
+  const total      = useSessionStore(s => s.flatQueue.length)
 
   const btn = (icon, label, onClick) => (
     <Tooltip text={label} position="bottom">
@@ -41,12 +40,14 @@ export default function CanvasToolbar({ fileName, page }) {
       {btn(<RotateCcw size={14} />, 'Undo (Ctrl+Z)', () => undo(fileName, page))}
       {btn(<Trash2 size={14} />, 'Clear all', () => { if (confirm('Clear all annotations for this image?')) clearAll(fileName, page) })}
       <div style={{ flex: 1 }} />
+      {onDeskew && btn(<Crop size={14} />, 'Perspective correction (deskew)', onDeskew)}
+      <div style={{ width: 1, height: 18, background: 'var(--surface-border)', margin: '0 4px' }} />
       <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
         {annCount} annotations
       </span>
       <div style={{ width: 1, height: 18, background: 'var(--surface-border)', margin: '0 4px' }} />
       <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
-        Space = pan · Scroll = zoom · Del = delete
+        left=draw · right=pan · scroll=zoom · Del=delete
       </span>
     </div>
   )

@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 
 let pdfjsLib = null
+
 const loadPdfJs = async () => {
   if (pdfjsLib) return pdfjsLib
   const mod = await import('pdfjs-dist')
-  mod.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.js', import.meta.url).toString()
+  // Use the CDN worker — avoids any local path issues
+  mod.GlobalWorkerOptions.workerSrc =
+    `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${mod.version}/pdf.worker.min.mjs`
   pdfjsLib = mod
   return mod
 }
@@ -24,10 +27,8 @@ export function usePdfRenderer() {
       const canvas = document.createElement('canvas')
       canvas.width  = vp.width
       canvas.height = vp.height
-      const ctx = canvas.getContext('2d')
-      await page.render({ canvasContext: ctx, viewport: vp }).promise
-      const dataUrl = canvas.toDataURL('image/png')
-      return { dataUrl, width: vp.width, height: vp.height, numPages: pdf.numPages }
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise
+      return { dataUrl: canvas.toDataURL('image/png'), width: vp.width, height: vp.height, numPages: pdf.numPages }
     } finally {
       setRendering(false)
     }
