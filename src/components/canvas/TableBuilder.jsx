@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Minus, X, Check, Trash2, Table2, Merge, Split, Copy, ChevronDown, ChevronUp, Sparkles, Loader } from 'lucide-react'
+import { Plus, Minus, X, Check, Trash2, Table2, Merge, Split, Copy, ChevronDown, ChevronUp, Sparkles, Loader, Scan, MousePointer } from 'lucide-react'
 import Button from '../ui/Button'
 
 const makeCell = () => ({ text: '', header: false, merged: false, hidden: false, rowspan: 1, colspan: 1 })
@@ -26,11 +26,8 @@ function AutoInput({ value, onChange, suggestions, autoFocus }) {
     if (v.trim().length >= 1) {
       const q = v.trim().toLowerCase()
       const f = suggestions.filter(s => s.toLowerCase().includes(q) && s !== v).slice(0, 6)
-      setFiltered(f)
-      setOpen(f.length > 0)
-    } else {
-      setOpen(false)
-    }
+      setFiltered(f); setOpen(f.length > 0)
+    } else { setOpen(false) }
   }
 
   const pick = (s) => { onChange(s); setOpen(false); ref.current?.focus() }
@@ -76,11 +73,19 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   const [cols, setCols]   = useState(initial.cols)
   const [cells, setCells] = useState(initial.cells)
   const [sel, setSel]     = useState(null)
-  const [dragging, setDragging] = useState(false)
+  const [dragging, setDragging]       = useState(false)
   const [showPreview, setShowPreview] = useState(true)
   const [detecting, setDetecting]     = useState(false)
   const [detectError, setDetectError] = useState(null)
   const [suggestions, setSuggestions] = useState([])
+
+  const [regionMode,   setRegionMode]   = useState(false)
+  const [regionOcring, setRegionOcring] = useState(false)
+  const regionDrag = useRef(null)
+  const [regionRect, setRegionRect]     = useState(null)
+
+  const [rightW,   setRightW]   = useState(330)
+  const [previewH, setPreviewH] = useState(220)
 
   const croppedDataUrl = useRef(null)
   const cropW = useRef(0); const cropH = useRef(0)
@@ -92,11 +97,11 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
     const img = new Image()
     img.onload = () => {
       const sx = Math.max(0, Math.round(ann.x)), sy = Math.max(0, Math.round(ann.y))
-      const sw = Math.min(Math.round(ann.w), (imgWidth||img.naturalWidth)-sx)
-      const sh = Math.min(Math.round(ann.h), (imgHeight||img.naturalHeight)-sy)
-      const scale = Math.min(900/sw, 800/sh, 3)
+      const sw = Math.min(Math.round(ann.w), (imgWidth || img.naturalWidth) - sx)
+      const sh = Math.min(Math.round(ann.h), (imgHeight || img.naturalHeight) - sy)
+      const scale = Math.min(900 / sw, 800 / sh, 3)
       const off = document.createElement('canvas')
-      off.width = Math.round(sw*scale); off.height = Math.round(sh*scale)
+      off.width = Math.round(sw * scale); off.height = Math.round(sh * scale)
       const ctx = off.getContext('2d')
       ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, off.width, off.height)
@@ -118,32 +123,32 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   const canvasCbRef = (el) => { canvasRef.current = el; if (el) paintCanvas(el) }
 
   const autoDetect = async () => {
-    if (!croppedDataUrl.current) return
+    if (!croppedDataUrl.current) { setDetectError('No image crop available.'); return }
     setDetecting(true); setDetectError(null)
+    const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
     try {
-      const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+      const health = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null)
+      if (!health || !health.ok) { setDetectError('OCR server not running. Start it with: python server.py'); return }
       const res = await fetch(`${API_BASE}/detect-table`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: croppedDataUrl.current }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(120000),
       })
+      if (!res.ok) { setDetectError(`Server error: ${res.status} ${res.statusText}`); return }
       const data = await res.json()
       if (data.error) { setDetectError(data.error); return }
-      if (!data.rows || !data.cols) { setDetectError('No table structure detected'); return }
+      if (!data.rows || !data.cols) { setDetectError('No table structure detected. Try adjusting the bounding box.'); return }
       const newCells = makeTable(data.rows, data.cols)
       for (const cd of data.cells) {
-        if (cd.row < data.rows && cd.col < data.cols) {
+        if (cd.row < data.rows && cd.col < data.cols)
           newCells[cd.row][cd.col] = { ...makeCell(), text: cd.text, rowspan: cd.rowspan??1, colspan: cd.colspan??1 }
-        }
       }
       setRows(data.rows); setCols(data.cols); setCells(newCells)
       setSuggestions(data.all_texts ?? []); setSel(null)
     } catch (e) {
-      setDetectError('Server unreachable. Is python server.py running?')
-    } finally {
-      setDetecting(false)
-    }
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') setDetectError('Detection timed out. Try a smaller table region.')
+      else setDetectError(`Error: ${e.message}`)
+    } finally { setDetecting(false) }
   }
 
   const updCell = (r, c, patch) =>
@@ -157,13 +162,13 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
       Array.from({ length: newC }, (_, c) => prev[r]?.[c] ?? makeCell())
     ))
   }
-  const addRow = () => resize(Math.min(rows+1, MAX), cols)
+  const addRow    = () => resize(Math.min(rows+1, MAX), cols)
   const removeRow = () => { if (rows > MIN) resize(rows-1, cols) }
-  const addCol = () => resize(rows, Math.min(cols+1, MAX))
+  const addCol    = () => resize(rows, Math.min(cols+1, MAX))
   const removeCol = () => { if (cols > MIN) resize(rows, cols-1) }
 
   const bounds = selBounds(sel)
-  const singleSel = bounds && bounds.r1===bounds.r2 && bounds.c1===bounds.c2 ? [bounds.r1,bounds.c1] : null
+  const singleSel = bounds && bounds.r1 === bounds.r2 && bounds.c1 === bounds.c2 ? [bounds.r1, bounds.c1] : null
 
   const onCellDown  = (r, c, e) => { e.preventDefault(); setSel({ start:[r,c], end:[r,c] }); setDragging(true) }
   const onCellEnter = (r, c)    => { if (dragging) setSel(s => s ? { ...s, end:[r,c] } : s) }
@@ -177,7 +182,7 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   const canMerge = bounds && (bounds.r2 > bounds.r1 || bounds.c2 > bounds.c1)
   const mergeCells = () => {
     if (!bounds) return
-    const { r1,r2,c1,c2 } = bounds
+    const { r1, r2, c1, c2 } = bounds
     const texts = []
     for (let r=r1;r<=r2;r++) for (let c=c1;c<=c2;c++) if (cells[r][c].text) texts.push(cells[r][c].text)
     setCells(prev => prev.map((row,r) => row.map((cell,c) => {
@@ -222,6 +227,24 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   const copyText = () => { if (!singleSel) return; navigator.clipboard.writeText(cells[singleSel[0]][singleSel[1]].text).catch(()=>{}) }
   const save = () => { onUpdate({ tableData: { rows, cols, cells } }); onClose() }
 
+  const startRightDrag = (e) => {
+    e.preventDefault()
+    const startX = e.clientX, startW = rightW
+    const onMove = (ev) => setRightW(Math.max(220, Math.min(600, startW - (ev.clientX - startX))))
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = '' }
+    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+  }
+
+  const startPreviewDrag = (e) => {
+    e.preventDefault()
+    const startY = e.clientY, startH = previewH
+    const onMove = (ev) => setPreviewH(Math.max(80, Math.min(500, startH + (ev.clientY - startY))))
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = '' }
+    document.body.style.cursor = 'row-resize'; document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+  }
+
   const ib  = { background:'var(--surface-raised)', border:'1px solid var(--surface-border)', borderRadius:5, width:26, height:26, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'var(--text-secondary)', padding:0, flexShrink:0 }
   const nd  = { fontFamily:'JetBrains Mono,monospace', fontSize:12, color:'var(--text-primary)', width:26, textAlign:'center' }
   const sep = <div style={{ width:1, height:20, background:'var(--surface-border)', margin:'0 4px', flexShrink:0 }} />
@@ -241,12 +264,13 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
 
         {/* Toolbar */}
         <div style={{ display:'flex', gap:6, padding:'8px 14px', borderBottom:'1px solid var(--surface-border)', background:'var(--surface)', flexShrink:0, alignItems:'center', flexWrap:'wrap' }}>
-          <button onClick={autoDetect} disabled={detecting||!imageUrl} style={{ display:'flex', alignItems:'center', gap:6, padding:'0 12px', height:26, background:detecting?'var(--surface)':color+'22', border:`1px solid ${color}88`, borderRadius:5, cursor:detecting||!imageUrl?'not-allowed':'pointer', fontSize:12, color, fontFamily:'inherit', fontWeight:700, flexShrink:0, opacity:!imageUrl?0.4:1 }}>
+          <button onClick={autoDetect} disabled={detecting || !imageUrl}
+            style={{ display:'flex', alignItems:'center', gap:6, padding:'0 12px', height:26, background: detecting ? 'var(--surface)' : color+'22', border:`1px solid ${color}88`, borderRadius:5, cursor: detecting||!imageUrl ? 'not-allowed':'pointer', fontSize:12, color, fontFamily:'inherit', fontWeight:700, flexShrink:0, opacity: !imageUrl ? 0.4 : 1 }}>
             {detecting ? <><Loader size={11} style={{ animation:'spin 1s linear infinite' }}/> Detecting…</> : <><Sparkles size={11}/> Auto-detect cells</>}
           </button>
-          {detectError && <span style={{ fontSize:11, color:'#e74c3c' }}>{detectError}</span>}
-          {suggestions.length > 0 && !detectError && <span style={{ fontSize:11, color:'#27ae60', fontFamily:'JetBrains Mono,monospace' }}>✓ {suggestions.length} texts ready</span>}
-          <div style={{ flex:1 }}/>
+          {detectError && <span style={{ fontSize:11, color:'#e74c3c', flex:1 }}>{detectError}</span>}
+          {suggestions.length > 0 && !detectError && <span style={{ fontSize:11, color:'var(--success)', fontFamily:'JetBrains Mono,monospace' }}>✓ {suggestions.length} texts ready</span>}
+          <div style={{ flex:1 }} />
           <span style={{ fontSize:11, color:'var(--text-muted)' }}>Rows</span>
           <button onClick={removeRow} style={ib}><Minus size={11}/></button>
           <span style={nd}>{rows}</span>
@@ -271,10 +295,14 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
           <button onClick={() => setShowPreview(p=>!p)} style={{ ...ib, width:'auto', padding:'0 10px', gap:5, fontSize:12, color:showPreview?color:'var(--text-secondary)', border:`1px solid ${showPreview?color+'66':'var(--surface-border)'}` }}>
             {showPreview?<ChevronDown size={12}/>:<ChevronUp size={12}/>} Preview
           </button>
+          {sep}
+          <span style={{ fontSize:10, color:'var(--text-muted)' }}>Drag to select · Tab = autocomplete</span>
         </div>
 
         {/* Body */}
         <div style={{ flex:1, overflow:'hidden', display:'flex' }}>
+
+          {/* Grid */}
           <div style={{ flex:1, overflow:'auto', padding:16 }}>
             <table style={{ borderCollapse:'collapse' }}>
               <thead>
@@ -297,7 +325,7 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
                         <td key={c} rowSpan={cell.rowspan??1} colSpan={cell.colspan??1}
                           onMouseDown={e => onCellDown(r,c,e)}
                           onMouseEnter={() => onCellEnter(r,c)}
-                          style={{ border:`1px solid ${isSel?color:'var(--surface-border)'}`, background:cell.header?color+'28':isSel?color+'18':'var(--surface)', padding:'6px 8px', cursor:'pointer', position:'relative', verticalAlign:'top', userSelect:'none', boxShadow:isSingle?`inset 0 0 0 2px ${color}`:isSel?`inset 0 0 0 1px ${color}55`:'none', transition:'background 0.08s' }}
+                          style={{ border:`1px solid ${isSel?color:'var(--surface-border)'}`, background: cell.header?color+'28':isSel?color+'18':'var(--surface)', padding:'6px 8px', cursor:'pointer', position:'relative', verticalAlign:'top', userSelect:'none', boxShadow: isSingle?`inset 0 0 0 2px ${color}`:isSel?`inset 0 0 0 1px ${color}55`:'none', transition:'background 0.08s' }}
                         >
                           {cell.header && <span style={{ position:'absolute', top:1, right:3, fontSize:8, color, fontFamily:'JetBrains Mono,monospace', fontWeight:700 }}>H</span>}
                           {cell.merged && <span style={{ position:'absolute', top:1, left:3, fontSize:8, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>{cell.rowspan}×{cell.colspan}</span>}
@@ -313,19 +341,99 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
             </table>
           </div>
 
+          {/* Horizontal resize handle */}
+          <div onMouseDown={startRightDrag}
+            style={{ width:4, flexShrink:0, background:'var(--surface-border)', cursor:'col-resize', transition:'background 0.15s', zIndex:10 }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-border)'}
+          />
+
           {/* Right panel */}
-          <div style={{ width:330, borderLeft:'1px solid var(--surface-border)', display:'flex', flexDirection:'column', flexShrink:0, overflow:'hidden' }}>
+          <div style={{ width:rightW, minWidth:220, maxWidth:600, display:'flex', flexDirection:'column', flexShrink:0, overflow:'hidden' }}>
+
+            {/* Image preview */}
             {showPreview && imageUrl && (
-              <div style={{ borderBottom:'1px solid var(--surface-border)', display:'flex', flexDirection:'column', maxHeight:'50%', minHeight:80, flexShrink:0 }}>
+              <div style={{ borderBottom:'1px solid var(--surface-border)', display:'flex', flexDirection:'column', height:previewH, minHeight:80, flexShrink:0 }}>
                 <div style={{ fontSize:10, color:'var(--text-muted)', padding:'6px 12px 4px', fontFamily:'JetBrains Mono,monospace', display:'flex', justifyContent:'space-between', flexShrink:0 }}>
-                  <span>TABLE CROP</span><span>{Math.round(ann.w)} × {Math.round(ann.h)}px</span>
+                  <span>{regionMode ? '🎯 DRAG TO SELECT REGION' : 'TABLE CROP'}</span>
+                  <span>{Math.round(ann.w)} × {Math.round(ann.h)}px</span>
                 </div>
-                <div style={{ overflow:'auto', padding:'0 10px 10px', flex:1 }}>
-                  <canvas ref={canvasCbRef} style={{ border:`1px solid ${color}44`, borderRadius:4, display:'block', maxWidth:'none' }}/>
+                <div style={{ overflow:'auto', padding:'0 10px 10px', flex:1, position:'relative' }}>
+                  <div style={{ position:'relative', display:'inline-block' }}>
+                    <canvas ref={canvasCbRef}
+                      style={{ border:`1px solid ${regionMode ? color : color+'44'}`, borderRadius:4, display:'block', maxWidth:'none', cursor: regionMode ? 'crosshair' : 'default' }}
+                      onMouseDown={e => {
+                        if (!regionMode) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const scaleX = cropW.current / rect.width
+                        const scaleY = cropH.current / rect.height
+                        regionDrag.current = { startX: (e.clientX-rect.left)*scaleX, startY: (e.clientY-rect.top)*scaleY, rect, scaleX, scaleY }
+                        setRegionRect(null); e.preventDefault()
+                      }}
+                      onMouseMove={e => {
+                        if (!regionMode || !regionDrag.current) return
+                        const { startX, startY, rect, scaleX, scaleY } = regionDrag.current
+                        const cx = (e.clientX-rect.left)*scaleX, cy = (e.clientY-rect.top)*scaleY
+                        setRegionRect({ x: Math.min(startX,cx), y: Math.min(startY,cy), w: Math.abs(cx-startX), h: Math.abs(cy-startY) })
+                      }}
+                      onMouseUp={async () => {
+                        if (!regionMode || !regionDrag.current || !regionRect || regionRect.w < 5 || regionRect.h < 5) { regionDrag.current = null; return }
+                        regionDrag.current = null
+                        if (!singleSel) return
+                        setRegionOcring(true)
+                        try {
+                          const src = document.createElement('canvas')
+                          src.width = Math.round(regionRect.w); src.height = Math.round(regionRect.h)
+                          const sctx = src.getContext('2d')
+                          const img = new Image()
+                          await new Promise(res => { img.onload = res; img.src = croppedDataUrl.current })
+                          sctx.drawImage(img, regionRect.x, regionRect.y, regionRect.w, regionRect.h, 0, 0, regionRect.w, regionRect.h)
+                          const base64 = src.toDataURL('image/png')
+                          const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+                          const res = await fetch(`${API_BASE}/ocr`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ image: base64 }),
+                            signal: AbortSignal.timeout(15000),
+                          })
+                          if (res.ok) {
+                            const data = await res.json()
+                            if (data.text) updCell(singleSel[0], singleSel[1], { text: data.text.trim() })
+                          }
+                        } catch (err) { console.warn('Region OCR error:', err) }
+                        finally { setRegionOcring(false); setRegionRect(null); setRegionMode(false) }
+                      }}
+                      onMouseLeave={() => { if (!regionDrag.current) setRegionRect(null) }}
+                    />
+                    {regionRect && regionRect.w > 2 && (
+                      <div style={{
+                        position:'absolute', pointerEvents:'none',
+                        left: regionRect.x / (cropW.current / (canvasRef.current?.getBoundingClientRect().width || 1)),
+                        top:  regionRect.y / (cropH.current / (canvasRef.current?.getBoundingClientRect().height || 1)),
+                        width: regionRect.w / (cropW.current / (canvasRef.current?.getBoundingClientRect().width || 1)),
+                        height: regionRect.h / (cropH.current / (canvasRef.current?.getBoundingClientRect().height || 1)),
+                        border:`2px solid ${color}`, background:`${color}22`, boxSizing:'border-box',
+                      }}/>
+                    )}
+                    {regionOcring && (
+                      <div style={{ position:'absolute', inset:0, background:'rgba(5,12,20,0.7)', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:4 }}>
+                        <Loader size={18} color={color} style={{ animation:'spin 1s linear infinite' }}/>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
 
+            {/* Vertical resize handle between preview and editor */}
+            {showPreview && imageUrl && (
+              <div onMouseDown={startPreviewDrag}
+                style={{ height:4, flexShrink:0, background:'var(--surface-border)', cursor:'row-resize', transition:'background 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-border)'}
+              />
+            )}
+
+            {/* Cell editor */}
             <div style={{ flex:1, overflow:'auto', padding:14, display:'flex', flexDirection:'column', gap:10 }}>
               {singleSel ? (
                 <>
@@ -338,6 +446,12 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
                     onChange={v => updCell(singleSel[0], singleSel[1], { text: v })}
                     suggestions={suggestions}
                   />
+                  {imageUrl && (
+                    <button onClick={() => { setRegionMode(m => !m); setRegionRect(null) }}
+                      style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', borderRadius:5, cursor:'pointer', fontSize:12, fontFamily:'inherit', background: regionMode ? color+'22' : 'var(--surface)', border:`1px solid ${regionMode ? color : 'var(--surface-border)'}`, color: regionMode ? color : 'var(--text-secondary)' }}>
+                      {regionMode ? <><MousePointer size={12}/> Click &amp; drag on image to OCR</> : <><Scan size={12}/> Select region to OCR</>}
+                    </button>
+                  )}
                   <label style={{ display:'flex', alignItems:'center', gap:7, cursor:'pointer', fontSize:12, color:'var(--text-secondary)' }}>
                     <input type="checkbox"
                       checked={cells[singleSel[0]][singleSel[1]].header}
@@ -367,8 +481,8 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
               ) : (
                 <div style={{ color:'var(--text-muted)', fontSize:12, textAlign:'center', marginTop:20, lineHeight:1.8 }}>
                   {imageUrl
-                    ? <>Click <b style={{ color }}>Auto-detect cells</b> to detect<br/>structure automatically,<br/>then click any cell to edit.</>
-                    : <>Click a cell to edit<br/><span style={{ fontSize:11 }}>Drag to select multiple</span></>
+                    ? <>Click <b style={{ color }}>Auto-detect cells</b> to detect structure,<br/>then click a cell to edit or select a region to OCR.</>
+                    : <>Click a cell to edit its text<br/><span style={{ fontSize:11 }}>Drag across cells to select multiple</span></>
                   }
                 </div>
               )}

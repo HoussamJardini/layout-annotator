@@ -1,3 +1,4 @@
+// src/hooks/usePdfRenderer.js
 import { useState } from 'react'
 
 let pdfjsLib = null
@@ -5,7 +6,6 @@ let pdfjsLib = null
 const loadPdfJs = async () => {
   if (pdfjsLib) return pdfjsLib
   const mod = await import('pdfjs-dist')
-  // Use the CDN worker — avoids any local path issues
   mod.GlobalWorkerOptions.workerSrc =
     `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${mod.version}/pdf.worker.min.mjs`
   pdfjsLib = mod
@@ -15,11 +15,11 @@ const loadPdfJs = async () => {
 export function usePdfRenderer() {
   const [rendering, setRendering] = useState(false)
 
-  const renderPage = async (fileHandle, pageNum = 1, scale = 2) => {
+  // NOW accepts a File object directly (not a handle)
+  const renderPage = async (file, pageNum = 1, scale = 2) => {
     setRendering(true)
     try {
       const lib    = await loadPdfJs()
-      const file   = await fileHandle.getFile()
       const buffer = await file.arrayBuffer()
       const pdf    = await lib.getDocument({ data: buffer }).promise
       const page   = await pdf.getPage(pageNum)

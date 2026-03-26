@@ -1,8 +1,9 @@
+// src/pages/Annotator.jsx
 import { useState, useEffect, useRef } from 'react'
 import { FolderOpen, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSessionStore } from '../store/useSessionStore'
 import { useAnnotationStore } from '../store/useAnnotationStore'
-import { useFileSystem, resolveFileHandle } from '../hooks/useFileSystem'
+import { useFileSystem, resolveFile } from '../hooks/useFileSystem'
 import { usePdfRenderer } from '../hooks/usePdfRenderer'
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts'
 import AnnotationCanvas from '../components/canvas/AnnotationCanvas'
@@ -86,20 +87,10 @@ export default function Annotator() {
     setLoadError(null)
 
     const load = async () => {
-      // Must have either dirHandle (new) or handle (legacy)
-      if (!currentFile.dirHandle && !currentFile.handle) {
-        setLoadError('__REOPEN__')
-        return
-      }
-
-      // Step 1: get a fresh file handle every time
-      let fileHandle
+      // Step 1: resolve a File via root-walk (no stored handles)
       let file
       try {
-        fileHandle = currentFile.dirHandle
-          ? await resolveFileHandle(currentFile)
-          : currentFile.handle
-        file = await fileHandle.getFile()
+        file = await resolveFile(currentFile)
       } catch (e) {
         console.warn('File access error:', e.name, e.message)
         setLoadError('__REOPEN__')
@@ -109,7 +100,7 @@ export default function Annotator() {
       // Step 2: render
       try {
         if (isPdf) {
-          const res = await renderPage(fileHandle, pdfPage + 1, 2)
+          const res = await renderPage(file, pdfPage + 1, 2)
           setImgData({ url: res.dataUrl, width: res.width, height: res.height })
           setPdfNumPages(res.numPages)
           setImageMeta(currentFile.fileName, pdfPage, {
@@ -165,6 +156,7 @@ export default function Annotator() {
           onDeskew={imgData ? () => setDeskewing(true) : undefined}
         />
 
+        {/* PDF page nav */}
         {isPdf && pdfNumPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'4px 16px', borderBottom:'1px solid var(--surface-border)', background:'var(--surface)', flexShrink:0 }}>
             <button onClick={() => setPdfPage(p => Math.max(0, p - 1))} disabled={pdfPage === 0}
