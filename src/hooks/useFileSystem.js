@@ -8,6 +8,11 @@ const getExt = (name) => {
   return i >= 0 ? name.slice(i).toLowerCase() : ''
 }
 
+// The one root handle — stays valid as long as the session is active
+let _rootHandle = null
+
+export function getRootHandle() { return _rootHandle }
+
 async function readDir(dirHandle, path = '') {
   const nodes = []
   try {
@@ -17,16 +22,16 @@ async function readDir(dirHandle, path = '') {
       if (handle.kind === 'directory') {
         try {
           const children = await readDir(handle, nodePath)
-          nodes.push({ type: 'folder', name, path: nodePath, children, dirHandle: handle })
+          nodes.push({ type: 'folder', name, path: nodePath, children })
         } catch (e) {
           console.warn(`Skipping directory "${nodePath}":`, e.message)
-          nodes.push({ type: 'folder', name, path: nodePath, children: [], dirHandle: handle })
+          nodes.push({ type: 'folder', name, path: nodePath, children: [] })
         }
       } else {
         const e = getExt(name)
         if (IMAGE_EXTS.includes(e) || e === PDF_EXT) {
-          // Store parent dirHandle, not the file handle — file handles go stale
-          nodes.push({ type: 'file', name, path: nodePath, sourceType: e === PDF_EXT ? 'pdf' : 'image', dirHandle })
+          // Store only the path — resolve from root on demand
+          nodes.push({ type: 'file', name, path: nodePath, sourceType: e === PDF_EXT ? 'pdf' : 'image' })
         }
       }
     }
@@ -43,21 +48,33 @@ function flatten(nodes, folder = '') {
   const result = []
   for (const node of nodes) {
     if (node.type === 'folder') result.push(...flatten(node.children, node.path))
-    else result.push({ fileName: node.name, folder, path: node.path, sourceType: node.sourceType, dirHandle: node.dirHandle, handle: null, page: 0 })
+    else result.push({ fileName: node.name, folder, path: node.path, sourceType: node.sourceType, page: 0 })
   }
   return result
 }
 
+/**
+ * Resolve a fresh file handle by re-walking from the root.
+ * Root handle never goes stale — this always works.
+ */
 export async function resolveFileHandle(entry) {
-  if (!entry.dirHandle) throw new Error('No directory handle stored for this file.')
-  return await entry.dirHandle.getFileHandle(entry.fileName)
+  const root = _rootHandle
+  if (!root) throw new Error('No root handle — please re-open the folder.')
+  const parts = entry.path.split('/')
+  let current = root
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = await current.getDirectoryHandle(parts[i])
+  }
+  return await current.getFileHandle(parts[parts.length - 1])
 }
 
 export function useFileSystem() {
   const setFileTree = useSessionStore(s => s.setFileTree)
+
   const openFolder = async () => {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'read' })
+      _rootHandle = dirHandle
       const tree = await readDir(dirHandle)
       const flat = flatten(tree)
       setFileTree(dirHandle.name, tree, flat)
@@ -67,6 +84,7 @@ export function useFileSystem() {
       return false
     }
   }
+
   const supported = 'showDirectoryPicker' in window
   return { openFolder, supported }
 }

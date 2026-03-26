@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { FolderOpen, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSessionStore } from '../store/useSessionStore'
 import { useAnnotationStore } from '../store/useAnnotationStore'
-import { useFileSystem } from '../hooks/useFileSystem'
+import { useFileSystem, resolveFileHandle } from '../hooks/useFileSystem'
 import { usePdfRenderer } from '../hooks/usePdfRenderer'
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts'
 import AnnotationCanvas from '../components/canvas/AnnotationCanvas'
@@ -12,7 +12,7 @@ import LabelPicker from '../components/sidebar/LabelPicker'
 import AnnotationList from '../components/sidebar/AnnotationList'
 import Button from '../components/ui/Button'
 import PerspectiveCorrector from '../components/canvas/PerspectiveCorrector'
-import { resolveFileHandle } from '../hooks/useFileSystem'
+
 function ResizeHandle({ onDrag, vertical = false }) {
   const dragging = useRef(false)
   const last     = useRef(0)
@@ -86,21 +86,30 @@ export default function Annotator() {
     setLoadError(null)
 
     const load = async () => {
-      if (!currentFile.handle) {
+      // Must have either dirHandle (new) or handle (legacy)
+      if (!currentFile.dirHandle && !currentFile.handle) {
         setLoadError('__REOPEN__')
         return
       }
+
+      // Step 1: get a fresh file handle every time
+      let fileHandle
       let file
       try {
-        file = await currentFile.handle.getFile()
-      }  catch (e) {
-        console.warn('getFile error:', e.name, e.message)
+        fileHandle = currentFile.dirHandle
+          ? await resolveFileHandle(currentFile)
+          : currentFile.handle
+        file = await fileHandle.getFile()
+      } catch (e) {
+        console.warn('File access error:', e.name, e.message)
         setLoadError('__REOPEN__')
         return
       }
+
+      // Step 2: render
       try {
         if (isPdf) {
-          const res = await renderPage(currentFile.handle, pdfPage + 1, 2)
+          const res = await renderPage(fileHandle, pdfPage + 1, 2)
           setImgData({ url: res.dataUrl, width: res.width, height: res.height })
           setPdfNumPages(res.numPages)
           setImageMeta(currentFile.fileName, pdfPage, {
@@ -124,6 +133,7 @@ export default function Annotator() {
         setLoadError(e.message || 'Failed to render file')
       }
     }
+
     load()
   }, [currentFile?.path, pdfPage])
 
@@ -134,6 +144,7 @@ export default function Annotator() {
   return (
     <div style={{ height:'100%', display:'flex', overflow:'hidden' }}>
 
+      {/* Left sidebar */}
       <div style={{ width:leftW, minWidth:140, maxWidth:480, display:'flex', flexDirection:'column', background:'var(--surface)', overflow:'hidden', flexShrink:0 }}>
         <div style={{ padding:10, borderBottom:'1px solid var(--surface-border)', flexShrink:0 }}>
           <Button size="sm" icon={FolderOpen} onClick={openFolder} style={{ width:'100%', justifyContent:'center' }}>
@@ -146,6 +157,7 @@ export default function Annotator() {
 
       <ResizeHandle onDrag={dx => setLeftW(w => Math.max(140, Math.min(480, w + dx)))} />
 
+      {/* Center */}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:200 }}>
         <CanvasToolbar
           fileName={currentFile?.fileName}
@@ -155,14 +167,14 @@ export default function Annotator() {
 
         {isPdf && pdfNumPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'4px 16px', borderBottom:'1px solid var(--surface-border)', background:'var(--surface)', flexShrink:0 }}>
-            <button onClick={() => setPdfPage(p => Math.max(0, p-1))} disabled={pdfPage === 0}
+            <button onClick={() => setPdfPage(p => Math.max(0, p - 1))} disabled={pdfPage === 0}
               style={{ background:'none', border:'none', cursor: pdfPage===0?'not-allowed':'pointer', color: pdfPage===0?'var(--text-muted)':'var(--text-secondary)', display:'flex', padding:4, borderRadius:4 }}>
               <ChevronLeft size={15}/>
             </button>
             <span style={{ fontSize:12, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>
-              Page <b style={{ color:'var(--text-primary)' }}>{pdfPage+1}</b> / {pdfNumPages}
+              Page <b style={{ color:'var(--text-primary)' }}>{pdfPage + 1}</b> / {pdfNumPages}
             </span>
-            <button onClick={() => setPdfPage(p => Math.min(pdfNumPages-1, p+1))} disabled={pdfPage===pdfNumPages-1}
+            <button onClick={() => setPdfPage(p => Math.min(pdfNumPages - 1, p + 1))} disabled={pdfPage===pdfNumPages-1}
               style={{ background:'none', border:'none', cursor: pdfPage===pdfNumPages-1?'not-allowed':'pointer', color: pdfPage===pdfNumPages-1?'var(--text-muted)':'var(--text-secondary)', display:'flex', padding:4, borderRadius:4 }}>
               <ChevronRight size={15}/>
             </button>
@@ -215,8 +227,9 @@ export default function Annotator() {
         )}
       </div>
 
-      <ResizeHandle onDrag={dx => setRightW(w => Math.max(160, Math.min(520, w-dx)))} />
+      <ResizeHandle onDrag={dx => setRightW(w => Math.max(160, Math.min(520, w - dx)))} />
 
+      {/* Right sidebar */}
       <div style={{ width:rightW, minWidth:160, maxWidth:520, display:'flex', flexDirection:'column', background:'var(--surface)', overflow:'hidden', flexShrink:0 }}>
         <div style={{ height:labelH, minHeight:80, maxHeight:'70%', display:'flex', flexDirection:'column', overflow:'hidden', flexShrink:0 }}>
           <div style={{ padding:'8px 10px 6px', borderBottom:'1px solid var(--surface-border)', flexShrink:0 }}>
@@ -225,7 +238,7 @@ export default function Annotator() {
           <div style={{ padding:8, overflowY:'auto', flex:1 }}><LabelPicker /></div>
         </div>
 
-        <ResizeHandle vertical onDrag={dy => setLabelH(h => Math.max(80, Math.min(500, h+dy)))} />
+        <ResizeHandle vertical onDrag={dy => setLabelH(h => Math.max(80, Math.min(500, h + dy)))} />
 
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minHeight:80 }}>
           <div style={{ padding:'8px 10px 6px', borderBottom:'1px solid var(--surface-border)', flexShrink:0, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
