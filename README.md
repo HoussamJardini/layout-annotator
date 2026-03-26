@@ -210,33 +210,7 @@ class_id cx cy width height
 
 ---
 
-## Project Structure
-```
-layout-annotator/
-├── start.bat                   ← one-click launcher (Windows)
-├── server.py                   ← FastAPI OCR + table detection server
-├── vevn/                       ← Python virtual environment (not committed)
-├── package.json
-├── vite.config.js
-└── src/
-    ├── pages/
-    │   ├── ClassConfig.jsx     ← label class manager
-    │   ├── SchemaEditor.jsx    ← export schema configuration
-    │   ├── Annotator.jsx       ← main annotation workspace
-    │   ├── ExportReview.jsx    ← export & review
-    │   └── About.jsx           ← about page
-    ├── components/
-    │   ├── canvas/             ← annotation canvas, bounding box, table builder
-    │   ├── sidebar/            ← file tree, label picker, annotation list
-    │   ├── schema/             ← schema field editor, JSON preview
-    │   ├── export/             ← export panel components
-    │   └── ui/                 ← Button, Modal, Badge, Toggle, ColorPicker
-    ├── store/                  ← Zustand state (annotations, classes, schema, session)
-    ├── hooks/                  ← useOCR, useFileSystem, usePdfRenderer, useKeyboardShortcuts
-    └── utils/                  ← exportJson, exportMarkdown, exportCoco, exportYolo, exportZip
-```
 
----
 
 ## Tech Stack
 
