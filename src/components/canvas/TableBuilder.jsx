@@ -5,57 +5,43 @@ import Button from '../ui/Button'
 const makeCell = () => ({ text: '', header: false, merged: false, hidden: false, rowspan: 1, colspan: 1 })
 const makeTable = (r, c) => Array.from({ length: r }, () => Array.from({ length: c }, makeCell))
 const MIN = 1, MAX = 30
-
 const selBounds = (sel) => {
   if (!sel) return null
-  return {
-    r1: Math.min(sel.start[0], sel.end[0]), r2: Math.max(sel.start[0], sel.end[0]),
-    c1: Math.min(sel.start[1], sel.end[1]), c2: Math.max(sel.start[1], sel.end[1]),
-  }
+  return { r1: Math.min(sel.start[0], sel.end[0]), r2: Math.max(sel.start[0], sel.end[0]), c1: Math.min(sel.start[1], sel.end[1]), c2: Math.max(sel.start[1], sel.end[1]) }
 }
 const inSel = (r, c, b) => b && r >= b.r1 && r <= b.r2 && c >= b.c1 && c <= b.c2
 
+// ── Autocomplete input ────────────────────────────────────────
 function AutoInput({ value, onChange, suggestions, autoFocus }) {
   const [open, setOpen] = useState(false)
   const [filtered, setFiltered] = useState([])
   const ref = useRef()
-
   const onType = (e) => {
-    const v = e.target.value
-    onChange(v)
+    const v = e.target.value; onChange(v)
     if (v.trim().length >= 1) {
-      const q = v.trim().toLowerCase()
-      const f = suggestions.filter(s => s.toLowerCase().includes(q) && s !== v).slice(0, 6)
+      const f = suggestions.filter(s => s.toLowerCase().includes(v.trim().toLowerCase()) && s !== v).slice(0, 6)
       setFiltered(f); setOpen(f.length > 0)
-    } else { setOpen(false) }
+    } else setOpen(false)
   }
-
   const pick = (s) => { onChange(s); setOpen(false); ref.current?.focus() }
-
   useEffect(() => {
     const h = (e) => { if (!ref.current?.closest('[data-autoinput]')?.contains(e.target)) setOpen(false) }
     window.addEventListener('mousedown', h)
     return () => window.removeEventListener('mousedown', h)
   }, [])
-
   return (
     <div data-autoinput="true" style={{ position: 'relative', width: '100%' }}>
       <textarea ref={ref} autoFocus={autoFocus} rows={4} value={value} onChange={onType}
-        onKeyDown={e => {
-          if (e.key === 'Escape') setOpen(false)
-          if (e.key === 'Tab' && open && filtered[0]) { e.preventDefault(); pick(filtered[0]) }
-        }}
+        onKeyDown={e => { if (e.key === 'Escape') setOpen(false); if (e.key === 'Tab' && open && filtered[0]) { e.preventDefault(); pick(filtered[0]) } }}
         placeholder="Type cell content… (autocomplete from detected text)"
         style={{ width:'100%', resize:'vertical', background:'var(--surface)', border:'1px solid var(--surface-border)', borderRadius:6, padding:'7px 9px', color:'var(--text-primary)', fontSize:13, fontFamily:'inherit', lineHeight:1.6 }}
       />
       {open && (
         <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:'var(--surface-raised)', border:'1px solid var(--surface-border)', borderRadius:6, overflow:'hidden', boxShadow:'0 8px 24px rgba(0,0,0,0.4)', marginTop:2 }}>
           {filtered.map((s, i) => (
-            <div key={i} onMouseDown={() => pick(s)}
-              style={{ padding:'7px 12px', cursor:'pointer', fontSize:12, color:'var(--text-primary)', borderBottom:'1px solid var(--surface-border)', display:'flex', alignItems:'center', gap:8 }}
+            <div key={i} onMouseDown={() => pick(s)} style={{ padding:'7px 12px', cursor:'pointer', fontSize:12, color:'var(--text-primary)', borderBottom:'1px solid var(--surface-border)', display:'flex', alignItems:'center', gap:8 }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--navy-800)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-            >
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               <span style={{ fontSize:10, color:'var(--accent)', fontFamily:'JetBrains Mono,monospace' }}>↵</span>
               <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s}</span>
               {i === 0 && <span style={{ fontSize:9, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>Tab</span>}
@@ -67,6 +53,165 @@ function AutoInput({ value, onChange, suggestions, autoFocus }) {
   )
 }
 
+// ── Zoomable / pannable preview canvas ────────────────────────
+function PreviewCanvas({ croppedDataUrl, cropW, cropH, color, regionMode, regionRect, setRegionRect, regionDrag, regionOcring, setRegionOcring, setRegionMode, singleSel, updCell, previewTransform, previewPan, canvasRef }) {
+  const containerRef = useRef(null)
+  const [, forceUpdate] = useState(0)
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !croppedDataUrl.current) return
+    const { scale, ox, oy } = previewTransform.current
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const img = new Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.save(); ctx.translate(ox, oy); ctx.scale(scale, scale)
+      ctx.drawImage(img, 0, 0, cropW.current, cropH.current)
+      ctx.restore()
+      ctx.save()
+      ctx.fillStyle = 'rgba(10,20,30,0.7)'
+      ctx.fillRect(canvas.width - 130, canvas.height - 22, 125, 17)
+      ctx.fillStyle = 'rgba(150,170,190,0.9)'; ctx.font = '10px monospace'
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle'
+      ctx.fillText(`${Math.round(scale * 100)}%  scroll=zoom  right=pan`, canvas.width - 5, canvas.height - 13)
+      ctx.restore()
+    }
+    img.src = croppedDataUrl.current
+  }, [])
+
+  useEffect(() => {
+    const container = containerRef.current
+    const canvas = canvasRef.current
+    if (!container || !canvas) return
+    const fit = () => {
+      const { width, height } = container.getBoundingClientRect()
+      canvas.width = width; canvas.height = height
+      if (cropW.current && cropH.current) {
+        const s  = Math.min((width - 20) / cropW.current, (height - 20) / cropH.current, 2)
+        previewTransform.current = { scale: s, ox: (width - cropW.current * s) / 2, oy: (height - cropH.current * s) / 2 }
+      }
+      draw()
+    }
+    setTimeout(fit, 50)
+  }, [croppedDataUrl.current])
+
+  useEffect(() => { draw() }, [regionRect])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const onWheel = (e) => {
+      e.preventDefault()
+      const rect   = canvas.getBoundingClientRect()
+      const mx     = (e.clientX - rect.left) * (canvas.width / rect.width)
+      const my     = (e.clientY - rect.top)  * (canvas.height / rect.height)
+      let delta    = e.deltaY
+      if (e.deltaMode === 1) delta *= 30
+      if (e.deltaMode === 2) delta *= 300
+      const factor = Math.exp(-delta / 400)
+      const { scale: s, ox, oy } = previewTransform.current
+      const ns = Math.max(0.1, Math.min(10, s * factor))
+      previewTransform.current = { scale: ns, ox: mx - (mx - ox) * (ns / s), oy: my - (my - oy) * (ns / s) }
+      draw(); forceUpdate(n => n + 1)
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [draw])
+
+  const cssToCv = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect()
+    return [(e.clientX - rect.left) * (canvasRef.current.width / rect.width), (e.clientY - rect.top) * (canvasRef.current.height / rect.height)]
+  }
+  const cvToImg = (cx, cy) => {
+    const { scale, ox, oy } = previewTransform.current
+    return [(cx - ox) / scale, (cy - oy) / scale]
+  }
+
+  const onMouseDown = (e) => {
+    if (e.button === 2) {
+      e.preventDefault()
+      const [cx, cy] = cssToCv(e)
+      previewPan.current = { startX: cx, startY: cy, ox: previewTransform.current.ox, oy: previewTransform.current.oy }
+      return
+    }
+    if (e.button === 0 && regionMode) {
+      const [cx, cy] = cssToCv(e)
+      const [ix, iy] = cvToImg(cx, cy)
+      regionDrag.current = { startIX: ix, startIY: iy }
+      setRegionRect(null); e.preventDefault()
+    }
+  }
+
+  const onMouseMove = (e) => {
+    const [cx, cy] = cssToCv(e)
+    if (previewPan.current) {
+      const p = previewPan.current
+      previewTransform.current = { ...previewTransform.current, ox: p.ox + cx - p.startX, oy: p.oy + cy - p.startY }
+      draw(); return
+    }
+    if (regionMode && regionDrag.current) {
+      const [ix, iy] = cvToImg(cx, cy)
+      const { startIX, startIY } = regionDrag.current
+      setRegionRect({ x: Math.min(startIX, ix), y: Math.min(startIY, iy), w: Math.abs(ix - startIX), h: Math.abs(iy - startIY) })
+    }
+  }
+
+  const onMouseUp = async () => {
+    previewPan.current = null
+    if (!regionMode || !regionDrag.current || !regionRect || regionRect.w < 5 || regionRect.h < 5) { regionDrag.current = null; return }
+    regionDrag.current = null
+    if (!singleSel) return
+    setRegionOcring(true)
+    try {
+      const src = document.createElement('canvas')
+      src.width = Math.round(regionRect.w); src.height = Math.round(regionRect.h)
+      const sctx = src.getContext('2d')
+      const img = new Image()
+      await new Promise(res => { img.onload = res; img.src = croppedDataUrl.current })
+      sctx.drawImage(img, regionRect.x, regionRect.y, regionRect.w, regionRect.h, 0, 0, regionRect.w, regionRect.h)
+      const base64 = src.toDataURL('image/png')
+      const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+      const res = await fetch(`${API_BASE}/ocr`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }), signal: AbortSignal.timeout(15000),
+      })
+      if (res.ok) { const data = await res.json(); if (data.text) updCell(singleSel[0], singleSel[1], { text: data.text.trim() }) }
+    } catch (err) { console.warn('Region OCR error:', err) }
+    finally { setRegionOcring(false); setRegionRect(null); setRegionMode(false) }
+  }
+
+  const onMouseLeave = () => { previewPan.current = null; if (!regionDrag.current) setRegionRect(null) }
+
+  const overlayRect = regionRect && regionRect.w > 2 ? (() => {
+    const { scale, ox, oy } = previewTransform.current
+    const canvas = canvasRef.current; if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    const rx = rect.width / canvas.width, ry = rect.height / canvas.height
+    return { left: (ox + regionRect.x * scale) * rx, top: (oy + regionRect.y * scale) * ry, width: regionRect.w * scale * rx, height: regionRect.h * scale * ry }
+  })() : null
+
+  return (
+    <div ref={containerRef} style={{ overflow:'hidden', flex:1, position:'relative', background:'var(--navy-950)' }}
+      onContextMenu={e => e.preventDefault()}>
+      <canvas ref={el => { canvasRef.current = el }}
+        style={{ display:'block', width:'100%', height:'100%', cursor: regionMode ? 'crosshair' : 'grab' }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
+      />
+      {overlayRect && (
+        <div style={{ position:'absolute', pointerEvents:'none', left:overlayRect.left, top:overlayRect.top, width:overlayRect.width, height:overlayRect.height, border:`2px solid ${color}`, background:`${color}22`, boxSizing:'border-box' }}/>
+      )}
+      {regionOcring && (
+        <div style={{ position:'absolute', inset:0, background:'rgba(5,12,20,0.7)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <Loader size={18} color={color} style={{ animation:'spin 1s linear infinite' }}/>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────
 export default function TableBuilder({ ann, onUpdate, onClose, classColor, imageUrl, imgWidth, imgHeight }) {
   const initial = ann.tableData ?? { rows: 3, cols: 3, cells: makeTable(3, 3) }
   const [rows, setRows]   = useState(initial.rows)
@@ -78,15 +223,14 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   const [detecting, setDetecting]     = useState(false)
   const [detectError, setDetectError] = useState(null)
   const [suggestions, setSuggestions] = useState([])
-
   const [regionMode,   setRegionMode]   = useState(false)
   const [regionOcring, setRegionOcring] = useState(false)
   const regionDrag = useRef(null)
-  const [regionRect, setRegionRect]     = useState(null)
-
+  const [regionRect, setRegionRect] = useState(null)
   const [rightW,   setRightW]   = useState(330)
   const [previewH, setPreviewH] = useState(220)
-
+  const previewTransform = useRef({ scale: 1, ox: 0, oy: 0 })
+  const previewPan = useRef(null)
   const croppedDataUrl = useRef(null)
   const cropW = useRef(0); const cropH = useRef(0)
   const canvasRef = useRef(null)
@@ -107,20 +251,9 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, off.width, off.height)
       croppedDataUrl.current = off.toDataURL('image/png')
       cropW.current = off.width; cropH.current = off.height
-      if (canvasRef.current) paintCanvas(canvasRef.current)
     }
     img.src = imageUrl
   }, [])
-
-  const paintCanvas = (el) => {
-    if (!el || !croppedDataUrl.current) return
-    el.width = cropW.current; el.height = cropH.current
-    const ctx = el.getContext('2d')
-    const img = new Image()
-    img.onload = () => ctx.drawImage(img, 0, 0)
-    img.src = croppedDataUrl.current
-  }
-  const canvasCbRef = (el) => { canvasRef.current = el; if (el) paintCanvas(el) }
 
   const autoDetect = async () => {
     if (!croppedDataUrl.current) { setDetectError('No image crop available.'); return }
@@ -131,20 +264,17 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
       if (!health || !health.ok) { setDetectError('OCR server not running. Start it with: python server.py'); return }
       const res = await fetch(`${API_BASE}/detect-table`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: croppedDataUrl.current }),
-        signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ image: croppedDataUrl.current }), signal: AbortSignal.timeout(120000),
       })
       if (!res.ok) { setDetectError(`Server error: ${res.status} ${res.statusText}`); return }
       const data = await res.json()
       if (data.error) { setDetectError(data.error); return }
       if (!data.rows || !data.cols) { setDetectError('No table structure detected. Try adjusting the bounding box.'); return }
       const newCells = makeTable(data.rows, data.cols)
-      for (const cd of data.cells) {
+      for (const cd of data.cells)
         if (cd.row < data.rows && cd.col < data.cols)
           newCells[cd.row][cd.col] = { ...makeCell(), text: cd.text, rowspan: cd.rowspan??1, colspan: cd.colspan??1 }
-      }
-      setRows(data.rows); setCols(data.cols); setCells(newCells)
-      setSuggestions(data.all_texts ?? []); setSel(null)
+      setRows(data.rows); setCols(data.cols); setCells(newCells); setSuggestions(data.all_texts ?? []); setSel(null)
     } catch (e) {
       if (e.name === 'TimeoutError' || e.name === 'AbortError') setDetectError('Detection timed out. Try a smaller table region.')
       else setDetectError(`Error: ${e.message}`)
@@ -152,24 +282,19 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
   }
 
   const updCell = (r, c, patch) =>
-    setCells(prev => prev.map((row, ri) =>
-      ri === r ? row.map((cell, ci) => ci === c ? { ...cell, ...patch } : cell) : row
-    ))
+    setCells(prev => prev.map((row, ri) => ri === r ? row.map((cell, ci) => ci === c ? { ...cell, ...patch } : cell) : row))
 
   const resize = (newR, newC) => {
     setRows(newR); setCols(newC); setSel(null)
-    setCells(prev => Array.from({ length: newR }, (_, r) =>
-      Array.from({ length: newC }, (_, c) => prev[r]?.[c] ?? makeCell())
-    ))
+    setCells(prev => Array.from({ length: newR }, (_, r) => Array.from({ length: newC }, (_, c) => prev[r]?.[c] ?? makeCell())))
   }
   const addRow    = () => resize(Math.min(rows+1, MAX), cols)
   const removeRow = () => { if (rows > MIN) resize(rows-1, cols) }
   const addCol    = () => resize(rows, Math.min(cols+1, MAX))
   const removeCol = () => { if (cols > MIN) resize(rows, cols-1) }
 
-  const bounds = selBounds(sel)
+  const bounds    = selBounds(sel)
   const singleSel = bounds && bounds.r1 === bounds.r2 && bounds.c1 === bounds.c2 ? [bounds.r1, bounds.c1] : null
-
   const onCellDown  = (r, c, e) => { e.preventDefault(); setSel({ start:[r,c], end:[r,c] }); setDragging(true) }
   const onCellEnter = (r, c)    => { if (dragging) setSel(s => s ? { ...s, end:[r,c] } : s) }
 
@@ -211,17 +336,13 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
     const vals = []
     for (let r=r1;r<=r2;r++) for (let c=c1;c<=c2;c++) if (!cells[r][c].hidden) vals.push(cells[r][c].header)
     const setTo = !vals.every(Boolean)
-    setCells(prev => prev.map((row,r) => row.map((cell,c) =>
-      r>=r1&&r<=r2&&c>=c1&&c<=c2&&!cell.hidden ? { ...cell, header:setTo } : cell
-    )))
+    setCells(prev => prev.map((row,r) => row.map((cell,c) => r>=r1&&r<=r2&&c>=c1&&c<=c2&&!cell.hidden ? { ...cell, header:setTo } : cell)))
   }
 
   const clearSel = () => {
     if (!bounds) return
     const { r1,r2,c1,c2 } = bounds
-    setCells(prev => prev.map((row,r) => row.map((cell,c) =>
-      r>=r1&&r<=r2&&c>=c1&&c<=c2 ? { ...cell, text:'' } : cell
-    )))
+    setCells(prev => prev.map((row,r) => row.map((cell,c) => r>=r1&&r<=r2&&c>=c1&&c<=c2 ? { ...cell, text:'' } : cell)))
   }
 
   const copyText = () => { if (!singleSel) return; navigator.clipboard.writeText(cells[singleSel[0]][singleSel[1]].text).catch(()=>{}) }
@@ -323,10 +444,8 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
                       const isSingle = singleSel?.[0]===r && singleSel?.[1]===c
                       return (
                         <td key={c} rowSpan={cell.rowspan??1} colSpan={cell.colspan??1}
-                          onMouseDown={e => onCellDown(r,c,e)}
-                          onMouseEnter={() => onCellEnter(r,c)}
-                          style={{ border:`1px solid ${isSel?color:'var(--surface-border)'}`, background: cell.header?color+'28':isSel?color+'18':'var(--surface)', padding:'6px 8px', cursor:'pointer', position:'relative', verticalAlign:'top', userSelect:'none', boxShadow: isSingle?`inset 0 0 0 2px ${color}`:isSel?`inset 0 0 0 1px ${color}55`:'none', transition:'background 0.08s' }}
-                        >
+                          onMouseDown={e => onCellDown(r,c,e)} onMouseEnter={() => onCellEnter(r,c)}
+                          style={{ border:`1px solid ${isSel?color:'var(--surface-border)'}`, background: cell.header?color+'28':isSel?color+'18':'var(--surface)', padding:'6px 8px', cursor:'pointer', position:'relative', verticalAlign:'top', userSelect:'none', boxShadow: isSingle?`inset 0 0 0 2px ${color}`:isSel?`inset 0 0 0 1px ${color}55`:'none', transition:'background 0.08s' }}>
                           {cell.header && <span style={{ position:'absolute', top:1, right:3, fontSize:8, color, fontFamily:'JetBrains Mono,monospace', fontWeight:700 }}>H</span>}
                           {cell.merged && <span style={{ position:'absolute', top:1, left:3, fontSize:8, color:'var(--text-muted)', fontFamily:'JetBrains Mono,monospace' }}>{cell.rowspan}×{cell.colspan}</span>}
                           <span style={{ fontSize:11, display:'block', paddingTop:cell.merged?10:0, color:cell.text?'var(--text-primary)':'var(--text-muted)', fontStyle:cell.text?'normal':'italic', fontWeight:cell.header?600:400 }}>
@@ -355,72 +474,19 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
             {showPreview && imageUrl && (
               <div style={{ borderBottom:'1px solid var(--surface-border)', display:'flex', flexDirection:'column', height:previewH, minHeight:80, flexShrink:0 }}>
                 <div style={{ fontSize:10, color:'var(--text-muted)', padding:'6px 12px 4px', fontFamily:'JetBrains Mono,monospace', display:'flex', justifyContent:'space-between', flexShrink:0 }}>
-                  <span>{regionMode ? '🎯 DRAG TO SELECT REGION' : 'TABLE CROP'}</span>
+                  <span style={{ color: regionMode ? color : 'var(--text-muted)' }}>{regionMode ? '🎯 DRAG TO SELECT REGION' : 'TABLE CROP'}</span>
                   <span>{Math.round(ann.w)} × {Math.round(ann.h)}px</span>
                 </div>
-                <div style={{ overflow:'auto', padding:'0 10px 10px', flex:1, position:'relative' }}>
-                  <div style={{ position:'relative', display:'inline-block' }}>
-                    <canvas ref={canvasCbRef}
-                      style={{ border:`1px solid ${regionMode ? color : color+'44'}`, borderRadius:4, display:'block', maxWidth:'none', cursor: regionMode ? 'crosshair' : 'default' }}
-                      onMouseDown={e => {
-                        if (!regionMode) return
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const scaleX = cropW.current / rect.width
-                        const scaleY = cropH.current / rect.height
-                        regionDrag.current = { startX: (e.clientX-rect.left)*scaleX, startY: (e.clientY-rect.top)*scaleY, rect, scaleX, scaleY }
-                        setRegionRect(null); e.preventDefault()
-                      }}
-                      onMouseMove={e => {
-                        if (!regionMode || !regionDrag.current) return
-                        const { startX, startY, rect, scaleX, scaleY } = regionDrag.current
-                        const cx = (e.clientX-rect.left)*scaleX, cy = (e.clientY-rect.top)*scaleY
-                        setRegionRect({ x: Math.min(startX,cx), y: Math.min(startY,cy), w: Math.abs(cx-startX), h: Math.abs(cy-startY) })
-                      }}
-                      onMouseUp={async () => {
-                        if (!regionMode || !regionDrag.current || !regionRect || regionRect.w < 5 || regionRect.h < 5) { regionDrag.current = null; return }
-                        regionDrag.current = null
-                        if (!singleSel) return
-                        setRegionOcring(true)
-                        try {
-                          const src = document.createElement('canvas')
-                          src.width = Math.round(regionRect.w); src.height = Math.round(regionRect.h)
-                          const sctx = src.getContext('2d')
-                          const img = new Image()
-                          await new Promise(res => { img.onload = res; img.src = croppedDataUrl.current })
-                          sctx.drawImage(img, regionRect.x, regionRect.y, regionRect.w, regionRect.h, 0, 0, regionRect.w, regionRect.h)
-                          const base64 = src.toDataURL('image/png')
-                          const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-                          const res = await fetch(`${API_BASE}/ocr`, {
-                            method:'POST', headers:{'Content-Type':'application/json'},
-                            body: JSON.stringify({ image: base64 }),
-                            signal: AbortSignal.timeout(15000),
-                          })
-                          if (res.ok) {
-                            const data = await res.json()
-                            if (data.text) updCell(singleSel[0], singleSel[1], { text: data.text.trim() })
-                          }
-                        } catch (err) { console.warn('Region OCR error:', err) }
-                        finally { setRegionOcring(false); setRegionRect(null); setRegionMode(false) }
-                      }}
-                      onMouseLeave={() => { if (!regionDrag.current) setRegionRect(null) }}
-                    />
-                    {regionRect && regionRect.w > 2 && (
-                      <div style={{
-                        position:'absolute', pointerEvents:'none',
-                        left: regionRect.x / (cropW.current / (canvasRef.current?.getBoundingClientRect().width || 1)),
-                        top:  regionRect.y / (cropH.current / (canvasRef.current?.getBoundingClientRect().height || 1)),
-                        width: regionRect.w / (cropW.current / (canvasRef.current?.getBoundingClientRect().width || 1)),
-                        height: regionRect.h / (cropH.current / (canvasRef.current?.getBoundingClientRect().height || 1)),
-                        border:`2px solid ${color}`, background:`${color}22`, boxSizing:'border-box',
-                      }}/>
-                    )}
-                    {regionOcring && (
-                      <div style={{ position:'absolute', inset:0, background:'rgba(5,12,20,0.7)', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:4 }}>
-                        <Loader size={18} color={color} style={{ animation:'spin 1s linear infinite' }}/>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <PreviewCanvas
+                  croppedDataUrl={croppedDataUrl} cropW={cropW} cropH={cropH}
+                  color={color} regionMode={regionMode}
+                  regionRect={regionRect} setRegionRect={setRegionRect}
+                  regionDrag={regionDrag} regionOcring={regionOcring}
+                  setRegionOcring={setRegionOcring} setRegionMode={setRegionMode}
+                  singleSel={singleSel} updCell={updCell}
+                  previewTransform={previewTransform} previewPan={previewPan}
+                  canvasRef={canvasRef}
+                />
               </div>
             )}
 
@@ -499,3 +565,4 @@ export default function TableBuilder({ ann, onUpdate, onClose, classColor, image
     </div>
   )
 }
+
