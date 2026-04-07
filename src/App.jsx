@@ -1,23 +1,37 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Layers, Settings, PenTool, Download, Info } from 'lucide-react'
+import { Layers, Settings, PenTool, Download, Info, RefreshCw } from 'lucide-react'
 import ClassConfig   from './pages/ClassConfig'
 import SchemaEditor  from './pages/SchemaEditor'
 import Annotator     from './pages/Annotator'
 import ExportReview  from './pages/ExportReview'
 import About         from './pages/About'
+import ModeSelector  from './components/ModeSelector'
+import { useModeStore } from './store/useModeStore'
 
-const NAV = [
-  { to: '/',        icon: Settings,  label: 'Classes',  desc: 'Label config' },
-  { to: '/schema',  icon: Layers,    label: 'Schema',   desc: 'Export structure' },
-  { to: '/annotate',icon: PenTool,   label: 'Annotate', desc: 'Draw boxes' },
-  { to: '/export',  icon: Download,  label: 'Export',   desc: 'Review & export' },
-  { to: '/about',   icon: Info,      label: 'About',    desc: 'About this tool' },
+const NAV_ALL = [
+  { to: '/',        icon: Settings,  label: 'Classes',  modes: ['document', 'object'] },
+  { to: '/schema',  icon: Layers,    label: 'Schema',   modes: ['document'] },
+  { to: '/annotate',icon: PenTool,   label: 'Annotate', modes: ['document', 'object'] },
+  { to: '/export',  icon: Download,  label: 'Export',   modes: ['document', 'object'] },
+  { to: '/about',   icon: Info,      label: 'About',    modes: ['document', 'object'] },
 ]
+
+const MODE_LABELS = {
+  document: { label: 'Document Layout', color: 'var(--accent)' },
+  object:   { label: 'Object Annotation', color: '#9B59B6' },
+}
+
 export default function App() {
-  const location = useLocation()
+  const location  = useLocation()
+  const mode      = useModeStore(s => s.mode)
+  const resetMode = useModeStore(s => s.resetMode)
+  if (mode === null) return <ModeSelector />
+
+  const NAV = NAV_ALL.filter(n => n.modes.includes(mode))
+  const modeInfo = MODE_LABELS[mode]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--navy-950)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--navy-950)', animation: 'fadeIn 0.25s ease' }}>
 
       {/* ── Top Nav ── */}
       <header style={{
@@ -47,7 +61,7 @@ export default function App() {
 
         {/* Nav items */}
         <nav style={{ display: 'flex', gap: 2, flex: 1 }}>
-          {NAV.map(({ to, icon: Icon, label, desc }) => {
+          {NAV.map(({ to, icon: Icon, label }) => {
             const active = to === '/'
               ? location.pathname === '/'
               : location.pathname.startsWith(to)
@@ -71,12 +85,30 @@ export default function App() {
           })}
         </nav>
 
-        {/* Right side status */}
+        {/* Right side */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)' }}>
             <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)', display: 'inline-block' }} />
             Auto-saved
           </div>
+
+          {/* Mode badge + switch */}
+          <button
+            onClick={resetMode}
+            title="Switch annotation mode"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: modeInfo.color + '18',
+              border: `1px solid ${modeInfo.color}55`,
+              borderRadius: 6, padding: '4px 10px',
+              cursor: 'pointer', fontSize: 11.5, fontWeight: 600,
+              color: modeInfo.color, fontFamily: 'inherit',
+              transition: 'all 0.15s',
+            }}
+          >
+            <RefreshCw size={11} />
+            {modeInfo.label}
+          </button>
         </div>
       </header>
 
@@ -87,7 +119,7 @@ export default function App() {
           <Route path="/schema"   element={<SchemaEditor />} />
           <Route path="/annotate" element={<Annotator />} />
           <Route path="/export"   element={<ExportReview />} />
-          <Route path="/about" element={<About />} />
+          <Route path="/about"    element={<About />} />
         </Routes>
       </main>
     </div>

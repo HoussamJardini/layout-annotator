@@ -1,22 +1,12 @@
 @echo off
-title LayoutAnnotator
-color 0A
+title LayoutAnnotator - OCR Backend
+color 0B
 
 echo.
 echo  ===========================================
-echo   LayoutAnnotator v2.1
+echo   LayoutAnnotator - OCR Backend
 echo  ===========================================
 echo.
-
-:: Check Node.js
-where node >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Node.js not found.
-    echo Please install from https://nodejs.org then re-run.
-    pause
-    exit /b 1
-)
-echo OK: Node.js found.
 
 :: Check Python
 where python >nul 2>&1
@@ -31,26 +21,13 @@ echo OK: Python found.
 :: Check Tesseract
 if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
     echo WARNING: Tesseract not found at C:\Program Files\Tesseract-OCR\
-    echo OCR features will be disabled.
+    echo OCR features will be limited.
     echo Download from: https://github.com/tesseract-ocr/tesseract/releases
     echo.
-    echo Press any key to continue without OCR, or close to install first.
+    echo Press any key to continue anyway, or close to install first.
     pause >nul
 )
-
-:: Install frontend deps if missing
-if not exist "node_modules" (
-    echo SETUP: Installing frontend dependencies...
-    call npm install
-    if %errorlevel% neq 0 (
-        echo ERROR: npm install failed.
-        pause
-        exit /b 1
-    )
-    echo OK: Frontend dependencies installed.
-) else (
-    echo OK: Frontend dependencies ready.
-)
+echo OK: Tesseract found.
 
 :: Create venv if missing
 if not exist "backend\venv" (
@@ -134,29 +111,20 @@ if %errorlevel% neq 0 (
 
 echo OK: All Python packages ready.
 
-:: Start backend in separate window
+:: Start backend
 if exist "backend\server.py" (
-    echo START: OCR backend on http://localhost:8000
-    start "OCR Backend" cmd /k "cd /d "%~dp0backend" && call venv\Scripts\activate.bat && python server.py"
-    timeout /t 3 /nobreak >nul
-    echo OK: Backend starting in background window.
+    echo.
+    echo  ===========================================
+    echo   OCR Backend: http://localhost:8000
+    echo   Keep this window open while annotating.
+    echo   Close to stop the backend.
+    echo  ===========================================
+    echo.
+    cd /d "%~dp0backend"
+    call venv\Scripts\activate.bat
+    python server.py
 ) else (
-    echo SKIP: backend\server.py not found - OCR features disabled.
+    echo ERROR: backend\server.py not found.
+    pause
+    exit /b 1
 )
-
-:: Start frontend
-echo START: Frontend on http://localhost:5173
-echo.
-echo  ===========================================
-echo   App:        http://localhost:5173
-echo   OCR Server: http://localhost:8000
-echo   Use Chrome or Edge.
-echo   Selecting Object Annotation mode will
-echo   automatically stop the OCR backend.
-echo   Close this window to stop the frontend.
-echo  ===========================================
-echo.
-
-timeout /t 2 /nobreak >nul
-start "" "http://localhost:5173"
-call npm run dev

@@ -4,6 +4,7 @@ import { useAnnotationStore } from '../../store/useAnnotationStore'
 import { useClassStore } from '../../store/useClassStore'
 import TableBuilder from '../canvas/TableBuilder'
 import { useOCR, shouldAutoOCR } from '../../hooks/useOCR'
+import { useModeStore } from '../../store/useModeStore'
 
 const getMode = (clsName) => {
   if (!clsName) return 'text'
@@ -80,13 +81,14 @@ function AnnItem({ ann, index, fileName, page, imageUrl, imgWidth, imgHeight }) 
   const [ocrSuggestion, setOcrSuggestion] = useState(null)
 
   const { runOCR, serverOnline } = useOCR()
+  const appMode    = useModeStore(s => s.mode)
 
   const cls        = getClass(ann.classId)
   const isSelected = ann.id === selectedId
   const mode       = getMode(cls?.name)
   const color      = cls?.color ?? '#888888'
   const ModeIcon   = mode === 'table' ? Table2 : mode === 'image' ? Image : Type
-  const canOCR     = mode === 'text' && shouldAutoOCR(cls?.name) && imageUrl
+  const canOCR     = mode === 'text' && shouldAutoOCR(cls?.name) && imageUrl && appMode === 'document'
 
   const triggerOCR = useCallback(async (e) => {
     e.stopPropagation()
@@ -223,7 +225,7 @@ function AnnItem({ ann, index, fileName, page, imageUrl, imgWidth, imgHeight }) 
             )}
 
             {/* TABLE */}
-            {mode === 'table' && (
+            {mode === 'table' && appMode === 'document' && (
               <div>
                 {ann.tableData ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -260,16 +262,18 @@ function AnnItem({ ann, index, fileName, page, imageUrl, imgWidth, imgHeight }) 
               />
             </div>
 
-            {/* Reading order */}
-            <div>
-              <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Reading order</label>
-              <input
-                type="number" min={0} placeholder="0, 1, 2…"
-                value={ann.reading_order ?? ''}
-                onChange={e => updateAnn(fileName, page, ann.id, { reading_order: e.target.value === '' ? null : parseInt(e.target.value) })}
-                style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--surface-border)', borderRadius: 5, padding: '4px 8px', color: 'var(--text-primary)', fontSize: 11, fontFamily: 'JetBrains Mono,monospace' }}
-              />
-            </div>
+            {/* Reading order — document mode only */}
+            {appMode === 'document' && (
+              <div>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Reading order</label>
+                <input
+                  type="number" min={0} placeholder="0, 1, 2…"
+                  value={ann.reading_order ?? ''}
+                  onChange={e => updateAnn(fileName, page, ann.id, { reading_order: e.target.value === '' ? null : parseInt(e.target.value) })}
+                  style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--surface-border)', borderRadius: 5, padding: '4px 8px', color: 'var(--text-primary)', fontSize: 11, fontFamily: 'JetBrains Mono,monospace' }}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

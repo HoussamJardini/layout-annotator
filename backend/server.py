@@ -137,6 +137,15 @@ class TableDetectResponse(BaseModel):
 def health():
     return {"status": "ok", "engines": ["tesseract-5", "tatr"]}
 
+@app.post("/shutdown")
+def shutdown():
+    import threading
+    def _stop():
+        time.sleep(0.3)
+        os._exit(0)
+    threading.Thread(target=_stop, daemon=True).start()
+    return {"status": "shutting down"}
+
 @app.post("/ocr", response_model=OCRResponse)
 @limiter.limit("30/minute")
 def run_ocr(req: OCRRequest, request: Request):
