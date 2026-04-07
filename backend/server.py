@@ -3,7 +3,8 @@ Layout Annotator — OCR + Table Detection Backend
 Install: pip install pytesseract pillow fastapi uvicorn numpy transformers torch torchvision sentencepiece tiktoken slowapi
 """
 
-import os, base64, io, time, logging
+import os, base64, io, time, logging, pathlib, subprocess, sys, json as _json, tempfile
+from typing import Optional
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["KMP_DUPLICATE_LIB_OK"]   = "TRUE"
 
@@ -137,14 +138,288 @@ class TableDetectResponse(BaseModel):
 def health():
     return {"status": "ok", "engines": ["tesseract-5", "tatr"]}
 
-@app.post("/shutdown")
-def shutdown():
-    import threading
-    def _stop():
-        time.sleep(0.3)
-        os._exit(0)
-    threading.Thread(target=_stop, daemon=True).start()
-    return {"status": "shutting down"}
+@app.post("/pick-file")
+def pick_file():
+    """Open a native OS file picker dialog via tkinter and return the selected path."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        path = filedialog.askopenfilename(
+            title="Select Model File",
+            filetypes=[
+                ("Model files", "*.pt *.pth *.onnx *.weights *.cfg *.bin *.safetensors *.h5 *.pkl"),
+                ("PyTorch",     "*.pt *.pth"),
+                ("ONNX",        "*.onnx"),
+                ("Darknet",     "*.weights *.cfg"),
+                ("All files",   "*.*"),
+            ],
+        )
+        root.destroy()
+        if not path:
+            return {"path": "", "dir": ""}
+        resolved = str(pathlib.Path(path).resolve())
+        parent   = str(pathlib.Path(resolved).parent)
+        return {"path": resolved, "dir": parent}
+    except Exception as e:
+        return {"path": "", "dir": "", "error": str(e)}
+
+# ── Model Config models ────────────────────────────────────────────────────────
+
+class InspectRequest(BaseModel):
+    model_path: str
+
+class InspectResponse(BaseModel):
+    framework:      str           = "Unknown"
+    input_shape:    str           = "unknown"
+    output_shape:   str           = "unknown"
+    num_classes:    Optional[int] = None
+    class_names:    list          = []
+    layers_summary: str           = ""
+    raw_info:       str           = ""
+    error:          str           = ""
+
+class RunModelRequest(BaseModel):
+    image:           str
+    model_path:      str
+    translator_code: str
+    device:          str   = "cpu"
+    confidence:      float = 0.25
+
+class RunModelResponse(BaseModel):
+    boxes:  list = []
+    error:  str  = ""
+    stderr: str  = ""
+
+# ── /models ────────────────────────────────────────────────────────────────────
+
+MODEL_EXTS = {'.pt', '.pth', '.onnx', '.weights', '.cfg', '.pb', '.tflite', '.bin', '.h5', '.pkl', '.safetensors'}
+
+@app.get("/models")
+def list_models(dir: str = ""):
+    if not dir:
+        return {"files": [], "error": "No directory specified"}
+    path = pathlib.Path(dir)
+    if not path.exists():
+        return {"files": [], "error": f"Directory not found: {dir}"}
+    if not path.is_dir():
+        return {"files": [], "error": f"Not a directory: {dir}"}
+    files = []
+    try:
+        for item in sorted(path.iterdir(), key=lambda x: (x.is_dir(), x.name.lower())):
+            if item.is_file() and item.suffix.lower() in MODEL_EXTS:
+                try:   size = item.stat().st_size
+                except: size = 0
+                files.append({"name": item.name, "path": str(item.resolve()), "size": size, "ext": item.suffix.lower(), "is_dir": False})
+            elif item.is_dir() and (item / "config.json").exists():
+                files.append({"name": item.name + "/", "path": str(item.resolve()), "size": 0, "ext": "dir", "is_dir": True})
+    except PermissionError as e:
+        return {"files": files, "error": f"Permission denied: {e}"}
+    return {"files": files, "error": ""}
+
+# ── /inspect-model ─────────────────────────────────────────────────────────────
+
+def _fmt_size(p):
+    try:
+        b = pathlib.Path(p).stat().st_size
+        if b >= 1 << 30: return f"{b/(1<<30):.1f} GB"
+        if b >= 1 << 20: return f"{b/(1<<20):.1f} MB"
+        return f"{b/(1<<10):.0f} KB"
+    except: return "?"
+
+def _inspect_pytorch(path: pathlib.Path) -> dict:
+    try:
+        import torch
+        try:
+            obj = torch.load(str(path), map_location="cpu", weights_only=True)
+        except Exception:
+            obj = torch.load(str(path), map_location="cpu", weights_only=False)
+
+        # Normalise to state dict
+        if hasattr(obj, "state_dict"):
+            sd = obj.state_dict()
+        elif isinstance(obj, dict) and any(isinstance(v, torch.Tensor) for v in obj.values()):
+            sd = obj
+        elif isinstance(obj, dict) and "model" in obj:
+            raw = obj["model"]
+            sd = raw.state_dict() if hasattr(raw, "state_dict") else (raw if isinstance(raw, dict) else {})
+        else:
+            sd = {}
+
+        keys = list(sd.keys()) if sd else []
+        num_classes = None
+        for k in reversed(keys):
+            if "weight" in k and sd[k].ndim >= 1:
+                num_classes = sd[k].shape[0]
+                break
+        summary_lines = keys[:25]
+        if len(keys) > 25:
+            summary_lines.append(f"... (+{len(keys)-25} more tensors)")
+        return {
+            "framework": "PyTorch", "input_shape": "unknown (state dict)",
+            "output_shape": "unknown (state dict)", "num_classes": num_classes,
+            "class_names": [], "layers_summary": "\n".join(summary_lines),
+            "raw_info": f"File: {path.name}\nSize: {_fmt_size(path)}\nTensors: {len(keys)}",
+        }
+    except ImportError:
+        return {"framework": "PyTorch", "error": "torch not installed", "input_shape": "unknown", "output_shape": "unknown", "class_names": []}
+    except Exception as e:
+        return {"framework": "PyTorch", "error": str(e), "input_shape": "unknown", "output_shape": "unknown", "class_names": []}
+
+def _inspect_onnx(path: pathlib.Path) -> dict:
+    try:
+        import onnxruntime as ort
+        sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+        ins  = [{"name": i.name, "shape": str(i.shape), "dtype": i.type} for i in sess.get_inputs()]
+        outs = [{"name": o.name, "shape": str(o.shape), "dtype": o.type} for o in sess.get_outputs()]
+        in_shape  = ins[0]["shape"]  if ins  else "unknown"
+        out_shape = outs[0]["shape"] if outs else "unknown"
+        summary = "Inputs:\n" + "\n".join(f"  {x}" for x in ins) + "\nOutputs:\n" + "\n".join(f"  {x}" for x in outs)
+        return {
+            "framework": "ONNX", "input_shape": in_shape, "output_shape": out_shape,
+            "num_classes": None, "class_names": [], "layers_summary": summary,
+            "raw_info": f"File: {path.name}\nSize: {_fmt_size(path)}",
+        }
+    except ImportError:
+        return {"framework": "ONNX", "input_shape": "unknown", "output_shape": "unknown",
+                "class_names": [], "raw_info": "onnxruntime not installed. Run: pip install onnxruntime"}
+    except Exception as e:
+        return {"framework": "ONNX", "error": str(e), "input_shape": "unknown", "output_shape": "unknown", "class_names": []}
+
+def _inspect_darknet(path: pathlib.Path) -> dict:
+    try:
+        # Use sibling .cfg if a .weights file was passed
+        cfg_path = path if path.suffix == ".cfg" else path.with_suffix(".cfg")
+        if not cfg_path.exists():
+            return {"framework": "Darknet", "input_shape": "unknown", "output_shape": "unknown",
+                    "class_names": [], "raw_info": f"No .cfg found alongside {path.name}"}
+        lines = cfg_path.read_text(errors="replace").splitlines()
+        sections, net, classes = [], {}, None
+        cur = None
+        for ln in lines:
+            ln = ln.strip()
+            if ln.startswith("["):
+                cur = ln[1:-1]; sections.append(cur)
+            elif "=" in ln and cur == "net":
+                k, v = ln.split("=", 1)
+                net[k.strip()] = v.strip()
+            elif ln.startswith("classes=") and classes is None:
+                try: classes = int(ln.split("=", 1)[1].strip())
+                except: pass
+        w = net.get("width", "?"); h = net.get("height", "?"); ch = net.get("channels", "?")
+        from collections import Counter
+        counts = Counter(sections)
+        summary = "\n".join(f"{k}: {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
+        return {
+            "framework": "Darknet", "input_shape": f"[1, {ch}, {h}, {w}]", "output_shape": "unknown",
+            "num_classes": classes, "class_names": [], "layers_summary": summary,
+            "raw_info": f"Config: {cfg_path.name}\nTotal sections: {len(sections)}",
+        }
+    except Exception as e:
+        return {"framework": "Darknet", "error": str(e), "input_shape": "unknown", "output_shape": "unknown", "class_names": []}
+
+def _inspect_huggingface(path: pathlib.Path) -> dict:
+    try:
+        cfg_file = path / "config.json" if path.is_dir() else path
+        with open(cfg_file) as f:
+            cfg = _json.load(f)
+        model_type = cfg.get("model_type", "unknown")
+        num_classes = cfg.get("num_labels", cfg.get("num_classes"))
+        id2label = cfg.get("id2label", {})
+        class_names = [id2label[str(i)] for i in sorted(int(k) for k in id2label)] if id2label else []
+        arch = (cfg.get("architectures") or ["unknown"])[0]
+        summary = f"model_type: {model_type}\narchitecture: {arch}"
+        raw = _json.dumps({k: v for k, v in cfg.items() if not isinstance(v, (dict, list)) or k == "architectures"}, indent=2)
+        return {
+            "framework": "HuggingFace", "input_shape": "variable (processor handles it)",
+            "output_shape": "variable", "num_classes": num_classes,
+            "class_names": class_names[:100], "layers_summary": summary, "raw_info": raw[:1200],
+        }
+    except Exception as e:
+        return {"framework": "HuggingFace", "error": str(e), "input_shape": "unknown", "output_shape": "unknown", "class_names": []}
+
+@app.post("/inspect-model", response_model=InspectResponse)
+def inspect_model(req: InspectRequest):
+    p = pathlib.Path(req.model_path)
+    if not p.exists():
+        return InspectResponse(error=f"Path not found: {req.model_path}")
+    ext = p.suffix.lower()
+    if ext in (".pt", ".pth", ".bin", ".safetensors", ".pkl"):
+        result = _inspect_pytorch(p)
+    elif ext == ".onnx":
+        result = _inspect_onnx(p)
+    elif ext in (".weights", ".cfg"):
+        result = _inspect_darknet(p)
+    elif p.is_dir() or (p.name == "config.json"):
+        result = _inspect_huggingface(p)
+    else:
+        result = {"framework": "Unknown", "input_shape": "unknown", "output_shape": "unknown",
+                  "class_names": [], "raw_info": f"File: {p.name}\nSize: {_fmt_size(p)}\nExtension: {ext or '(none)'} — could not auto-detect model type."}
+    fields = set(InspectResponse.model_fields) if hasattr(InspectResponse, "model_fields") else set(InspectResponse.__fields__)
+    return InspectResponse(**{k: v for k, v in result.items() if k in fields})
+
+# ── /run-model ─────────────────────────────────────────────────────────────────
+
+_RUN_HARNESS = """
+import sys, json
+from PIL import Image
+
+{code}
+
+image_pil = Image.open(sys.argv[1]).convert('RGB')
+model_path = sys.argv[2]
+device     = sys.argv[3]
+confidence = float(sys.argv[4])
+
+result   = run(image_pil, model_path, device)
+filtered = [b for b in result if float(b.get('confidence', 0)) >= confidence]
+print(json.dumps(filtered))
+"""
+
+@app.post("/run-model", response_model=RunModelResponse)
+def run_model_endpoint(req: RunModelRequest):
+    # Validate and decode image
+    try:
+        img = decode_and_validate_image(req.image)
+    except ValueError as e:
+        return RunModelResponse(error=str(e))
+
+    tmp_img = tmp_script = None
+    try:
+        # Write image to temp file
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            img.save(f.name)
+            tmp_img = f.name
+
+        # Write harness script to temp file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+            f.write(_RUN_HARNESS.format(code=req.translator_code))
+            tmp_script = f.name
+
+        proc = subprocess.run(
+            [sys.executable, tmp_script, tmp_img, req.model_path, req.device, str(req.confidence)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        if proc.returncode != 0:
+            return RunModelResponse(error=f"Exit code {proc.returncode}", stderr=proc.stderr[-3000:])
+        try:
+            boxes = _json.loads(proc.stdout)
+            return RunModelResponse(boxes=boxes)
+        except _json.JSONDecodeError:
+            return RunModelResponse(error="Could not parse model output as JSON", stderr=proc.stdout[-500:] + proc.stderr[-500:])
+    except subprocess.TimeoutExpired:
+        return RunModelResponse(error="Inference timed out (120s)")
+    except Exception as e:
+        return RunModelResponse(error=str(e))
+    finally:
+        for p in (tmp_img, tmp_script):
+            if p:
+                try: os.unlink(p)
+                except: pass
 
 @app.post("/ocr", response_model=OCRResponse)
 @limiter.limit("30/minute")

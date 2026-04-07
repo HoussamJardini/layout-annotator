@@ -3,6 +3,9 @@ import { useState, useEffect, useRef } from 'react'
 import { FolderOpen, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSessionStore } from '../store/useSessionStore'
 import { useAnnotationStore } from '../store/useAnnotationStore'
+import { useClassStore } from '../store/useClassStore'
+import { useModeStore } from '../store/useModeStore'
+import { useModelStore } from '../store/useModelStore'
 import { useFileSystem, resolveFile } from '../hooks/useFileSystem'
 import { usePdfRenderer } from '../hooks/usePdfRenderer'
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts'
@@ -13,6 +16,16 @@ import LabelPicker from '../components/sidebar/LabelPicker'
 import AnnotationList from '../components/sidebar/AnnotationList'
 import Button from '../components/ui/Button'
 import PerspectiveCorrector from '../components/canvas/PerspectiveCorrector'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+
+// Consistent color from label name using the same palette as colorUtils
+const PALETTE = ['#3498db','#9b59b6','#e67e22','#1abc9c','#e74c3c','#f39c12','#2980b9','#27ae60','#c0392b','#16a085','#8e44ad','#d35400','#2ecc71','#34495e','#f1c40f']
+function nameToColor(name) {
+  let h = 0
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return PALETTE[h % PALETTE.length]
+}
 
 function ResizeHandle({ onDrag, vertical = false }) {
   const dragging = useRef(false)
@@ -65,9 +78,11 @@ export default function Annotator() {
   const [pdfNumPages,  setPdfNumPages]  = useState(1)
   const [deskewing,    setDeskewing]    = useState(false)
   const [correctedImg, setCorrectedImg] = useState(null)
-  const [leftW,        setLeftW]        = useState(220)
-  const [rightW,       setRightW]       = useState(240)
-  const [labelH,       setLabelH]       = useState(200)
+  const [leftW,             setLeftW]             = useState(220)
+  const [rightW,            setRightW]            = useState(240)
+  const [labelH,            setLabelH]            = useState(200)
+  const [autoAnnotating,    setAutoAnnotating]    = useState(false)
+  const [autoAnnotateMsg,   setAutoAnnotateMsg]   = useState('')
 
   useEffect(() => {
     setPdfPage(0)
@@ -132,6 +147,77 @@ export default function Annotator() {
   const activeW   = correctedImg?.width  ?? imgData?.width
   const activeH   = correctedImg?.height ?? imgData?.height
 
+  // ── Auto-Annotate (object mode) ─────────────────────────────────────────────
+  const handleAutoAnnotate = async () => {
+    if (!activeUrl || !currentFile) return
+    const { modelPath, translatorCode, device, confidence } = useModelStore.getState()
+    if (!modelPath) return
+
+    setAutoAnnotating(true)
+    setAutoAnnotateMsg('')
+    try {
+      // Convert blob/data URL to base64
+      const blob   = await fetch(activeUrl).then(r => r.blob())
+      const base64 = await new Promise(res => {
+        const reader = new FileReader()
+        reader.onload = e => res(e.target.result)
+        reader.readAsDataURL(blob)
+      })
+
+      const resp = await fetch(`${API_BASE}/run-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, model_path: modelPath, translator_code: translatorCode, device, confidence }),
+        signal: AbortSignal.timeout(120000),
+      })
+      const data = await resp.json()
+
+      if (data.error) {
+        setAutoAnnotateMsg(`Error: ${data.error.slice(0, 50)}`)
+        setTimeout(() => setAutoAnnotateMsg(''), 5000)
+        return
+      }
+      if (!data.boxes?.length) {
+        setAutoAnnotateMsg('No detections')
+        setTimeout(() => setAutoAnnotateMsg(''), 3000)
+        return
+      }
+
+      // Resolve label → classId (create missing classes in one pass)
+      const { classes, addClass } = useClassStore.getState()
+      const { addAnnotation }     = useAnnotationStore.getState()
+      const labelMap = {}
+
+      for (const box of data.boxes) {
+        if (labelMap[box.label]) continue
+        const existing = classes.find(c => c.name.toLowerCase() === box.label.toLowerCase())
+        if (existing) {
+          labelMap[box.label] = existing.id
+        } else {
+          const id = `cls_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+          addClass({ id, name: box.label, color: nameToColor(box.label), shortcut: '', description: '' })
+          labelMap[box.label] = id
+        }
+      }
+
+      for (const box of data.boxes) {
+        addAnnotation(currentFile.fileName, effectivePage, {
+          id: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          classId: labelMap[box.label],
+          x: box.x, y: box.y, w: box.w, h: box.h,
+          confidence: box.confidence,
+        })
+      }
+
+      setAutoAnnotateMsg(`✓ ${data.boxes.length} box${data.boxes.length !== 1 ? 'es' : ''} added`)
+      setTimeout(() => setAutoAnnotateMsg(''), 3000)
+    } catch (e) {
+      setAutoAnnotateMsg(`Failed: ${e.message}`)
+      setTimeout(() => setAutoAnnotateMsg(''), 5000)
+    }
+    setAutoAnnotating(false)
+  }
+
   return (
     <div style={{ height:'100%', display:'flex', overflow:'hidden' }}>
 
@@ -154,6 +240,9 @@ export default function Annotator() {
           fileName={currentFile?.fileName}
           page={effectivePage}
           onDeskew={imgData ? () => setDeskewing(true) : undefined}
+          onAutoAnnotate={handleAutoAnnotate}
+          autoAnnotating={autoAnnotating}
+          autoAnnotateMsg={autoAnnotateMsg}
         />
 
         {/* PDF page nav */}

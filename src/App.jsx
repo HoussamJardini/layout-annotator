@@ -1,10 +1,11 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Layers, Settings, PenTool, Download, Info, RefreshCw } from 'lucide-react'
+import { Layers, Settings, PenTool, Download, Info, RefreshCw, Cpu } from 'lucide-react'
 import ClassConfig   from './pages/ClassConfig'
 import SchemaEditor  from './pages/SchemaEditor'
 import Annotator     from './pages/Annotator'
 import ExportReview  from './pages/ExportReview'
 import About         from './pages/About'
+import ModelConfig   from './pages/ModelConfig'
 import ModeSelector  from './components/ModeSelector'
 import { useModeStore } from './store/useModeStore'
 
@@ -12,6 +13,7 @@ const NAV_ALL = [
   { to: '/',        icon: Settings,  label: 'Classes',  modes: ['document', 'object'] },
   { to: '/schema',  icon: Layers,    label: 'Schema',   modes: ['document'] },
   { to: '/annotate',icon: PenTool,   label: 'Annotate', modes: ['document', 'object'] },
+  { to: '/model',   icon: Cpu,       label: 'Model',    modes: ['object'] },
   { to: '/export',  icon: Download,  label: 'Export',   modes: ['document', 'object'] },
   { to: '/about',   icon: Info,      label: 'About',    modes: ['document', 'object'] },
 ]
@@ -118,6 +120,7 @@ export default function App() {
           <Route path="/"         element={<ClassConfig />} />
           <Route path="/schema"   element={<SchemaEditor />} />
           <Route path="/annotate" element={<Annotator />} />
+          <Route path="/model"    element={<ModelConfig />} />
           <Route path="/export"   element={<ExportReview />} />
           <Route path="/about"    element={<About />} />
         </Routes>

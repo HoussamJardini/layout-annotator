@@ -53,19 +53,8 @@ function ModeCard({ icon: Icon, title, desc, onClick, accentColor }) {
   )
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-
 export default function ModeSelector() {
   const setMode = useModeStore(s => s.setMode)
-
-  const handleSelect = async (selectedMode) => {
-    if (selectedMode === 'object') {
-      try {
-        await fetch(`${API_BASE}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(1500) })
-      } catch { /* backend may not be running — that's fine */ }
-    }
-    setMode(selectedMode)
-  }
 
   return (
     <div style={{
@@ -105,14 +94,14 @@ export default function ModeSelector() {
           icon={FileText}
           title="Document Layout Annotation"
           desc="Annotate document regions, tables, OCR text extraction"
-          onClick={() => handleSelect('document')}
+          onClick={() => setMode('document')}
           accentColor="var(--accent)"
         />
         <ModeCard
           icon={Box}
           title="Object Annotation"
           desc="Annotate objects in images with bounding boxes"
-          onClick={() => handleSelect('object')}
+          onClick={() => setMode('object')}
           accentColor="#9B59B6"
         />
       </div>

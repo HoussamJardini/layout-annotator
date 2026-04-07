@@ -1,10 +1,158 @@
-import { useState, useCallback } from 'react'
-import { Trash2, Table2, Type, Image, Sparkles, Check, X, Loader } from 'lucide-react'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { Trash2, Table2, Type, Image, Sparkles, Check, X, Loader, Plus, ChevronDown } from 'lucide-react'
 import { useAnnotationStore } from '../../store/useAnnotationStore'
 import { useClassStore } from '../../store/useClassStore'
 import TableBuilder from '../canvas/TableBuilder'
 import { useOCR, shouldAutoOCR } from '../../hooks/useOCR'
 import { useModeStore } from '../../store/useModeStore'
+
+// Consistent color from label name
+const _PALETTE = ['#3498db','#9b59b6','#e67e22','#1abc9c','#e74c3c','#f39c12','#2980b9','#27ae60','#c0392b','#16a085','#8e44ad','#d35400','#2ecc71','#34495e','#f1c40f']
+function nameToColor(name) {
+  let h = 0
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return _PALETTE[h % _PALETTE.length]
+}
+
+// ─── ClassPicker ─────────────────────────────────────────────────────────────
+function ClassPicker({ ann, fileName, page }) {
+  const classes   = useClassStore(s => s.classes)
+  const addClass  = useClassStore(s => s.addClass)
+  const updateAnn = useAnnotationStore(s => s.updateAnnotation)
+  const getClass  = useClassStore(s => s.getClassById)
+
+  const [query, setQuery] = useState('')
+  const [open, setOpen]   = useState(false)
+  const inputRef = useRef(null)
+
+  const cls      = getClass(ann.classId)
+  const filtered = classes.filter(c =>
+    !query || c.name.toLowerCase().includes(query.toLowerCase())
+  )
+  const exactMatch = classes.find(c => c.name.toLowerCase() === query.trim().toLowerCase())
+  const canCreate  = query.trim() && !exactMatch
+
+  // Close on outside click
+  const wrapRef = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const assign = (classId) => {
+    updateAnn(fileName, page, ann.id, { classId })
+    setOpen(false)
+    setQuery('')
+  }
+
+  const createAndAssign = () => {
+    const name = query.trim()
+    if (!name) return
+    const id = `cls_${Date.now()}`
+    addClass({ id, name, color: nameToColor(name), shortcut: '', description: '' })
+    assign(id)
+  }
+
+  return (
+    <div ref={wrapRef} onClick={e => e.stopPropagation()} style={{ position: 'relative' }}>
+      <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Class</label>
+
+      {/* Trigger */}
+      <div
+        onClick={() => { setOpen(o => !o); setTimeout(() => inputRef.current?.focus(), 50) }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px', borderRadius: 5, cursor: 'pointer',
+          background: 'var(--navy-900)', border: `1px solid ${open ? 'var(--accent)' : 'var(--surface-border)'}`,
+          transition: 'border-color 0.12s',
+        }}
+      >
+        <div style={{ width: 10, height: 10, borderRadius: 3, background: cls?.color ?? '#666', flexShrink: 0 }} />
+        <span style={{ flex: 1, fontSize: 12, color: 'var(--text-primary)', fontFamily: 'JetBrains Mono,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {cls?.name ?? 'unknown'}
+        </span>
+        <ChevronDown size={11} color="var(--text-muted)" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s', flexShrink: 0 }} />
+      </div>
+
+      {/* Dropdown */}
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200, marginTop: 3,
+          background: 'var(--surface)', border: '1px solid var(--surface-border)',
+          borderRadius: 7, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', overflow: 'hidden',
+        }}>
+          {/* Search input */}
+          <div style={{ padding: '7px 8px', borderBottom: '1px solid var(--surface-border)' }}>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') canCreate ? createAndAssign() : filtered[0] && assign(filtered[0].id)
+                if (e.key === 'Escape') setOpen(false)
+              }}
+              placeholder="Search or type new class…"
+              style={{
+                width: '100%', background: 'var(--navy-900)', border: '1px solid var(--surface-border)',
+                borderRadius: 5, padding: '4px 8px', color: 'var(--text-primary)',
+                fontSize: 11.5, fontFamily: 'JetBrains Mono,monospace', outline: 'none',
+              }}
+            />
+          </div>
+
+          {/* Class list */}
+          <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+            {filtered.map(c => (
+              <div
+                key={c.id}
+                onClick={() => assign(c.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 10px', cursor: 'pointer',
+                  background: c.id === ann.classId ? c.color + '1a' : 'transparent',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={e => { if (c.id !== ann.classId) e.currentTarget.style.background = 'var(--navy-800)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = c.id === ann.classId ? c.color + '1a' : 'transparent' }}
+              >
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: c.color, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12, color: c.id === ann.classId ? c.color : 'var(--text-secondary)', fontFamily: 'JetBrains Mono,monospace' }}>
+                  {c.name}
+                </span>
+                {c.id === ann.classId && <Check size={11} color={c.color} />}
+              </div>
+            ))}
+
+            {/* Create new */}
+            {canCreate && (
+              <div
+                onClick={createAndAssign}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 10px', cursor: 'pointer',
+                  borderTop: filtered.length ? '1px solid var(--surface-border)' : 'none',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = '#9B59B611'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <Plus size={11} color="#9B59B6" />
+                <span style={{ fontSize: 12, color: '#9B59B6', fontFamily: 'JetBrains Mono,monospace' }}>
+                  Create &ldquo;{query.trim()}&rdquo;
+                </span>
+              </div>
+            )}
+
+            {filtered.length === 0 && !canCreate && (
+              <div style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-muted)' }}>No classes found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const getMode = (clsName) => {
   if (!clsName) return 'text'
@@ -153,6 +301,25 @@ function AnnItem({ ann, index, fileName, page, imageUrl, imgWidth, imgHeight }) 
         {/* Expanded */}
         {isSelected && (
           <div onClick={e => e.stopPropagation()} style={{ padding: '0 9px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+            {/* CLASS PICKER — object mode */}
+            {appMode === 'object' && (
+              <ClassPicker ann={ann} fileName={fileName} page={page} />
+            )}
+
+            {/* Confidence badge (model-generated) */}
+            {appMode === 'object' && ann.confidence != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Confidence</span>
+                <span style={{
+                  fontSize: 10, fontFamily: 'JetBrains Mono,monospace',
+                  color: ann.confidence > 0.75 ? 'var(--success)' : ann.confidence > 0.5 ? 'var(--warning)' : 'var(--danger)',
+                  fontWeight: 700,
+                }}>
+                  {Math.round(ann.confidence * 100)}%
+                </span>
+              </div>
+            )}
 
             {/* TEXT */}
             {mode === 'text' && (
